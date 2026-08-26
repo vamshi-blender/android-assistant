@@ -1,17 +1,25 @@
 package com.vamshi.aiassistant.overlay
 
 import android.graphics.PixelFormat
-import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleService
@@ -47,16 +55,16 @@ class OverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateRegist
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         windowManager = wm
 
+        // The window covers the full screen so it fully owns touch input while
+        // shown - nothing behind it is clickable until the overlay is closed.
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.CENTER
-        }
+        )
 
         val composeView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
@@ -82,14 +90,49 @@ class OverlayService : LifecycleService(), ViewModelStoreOwner, SavedStateRegist
 
 @Composable
 private fun OverlayContent(onClose: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 8.dp
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Tapping the transparent area outside the panel closes the
+            // overlay and consumes the tap - it never reaches whatever is
+            // underneath, since this window owns the whole screen.
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClose
+            )
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text(text = "AI Assistant", style = MaterialTheme.typography.titleMedium)
-            Text(text = "Overlay is showing above the home screen.")
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(0.3f)
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to Color.Transparent,
+                            1.0f to Color.Black
+                        )
+                    )
+                )
+                // Swallow taps on the panel itself so they don't bubble up
+                // to the outer close-on-tap modifier.
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
+                .padding(24.dp)
+        ) {
+            Text(
+                text = "AI Assistant",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Overlay is showing above the home screen.",
+                color = Color.White
+            )
             Button(
                 onClick = onClose,
                 modifier = Modifier.padding(top = 12.dp)

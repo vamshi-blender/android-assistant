@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -30,8 +35,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AIAssistantTheme {
+                var showChat by rememberSaveable { mutableStateOf(false) }
+                BackHandler(enabled = showChat) { showChat = false }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    HomeScreen(modifier = Modifier.padding(innerPadding))
+                    if (showChat) {
+                        ChatScreen(modifier = Modifier.padding(innerPadding))
+                    } else {
+                        HomeScreen(
+                            onOpenChat = { showChat = true },
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    }
                 }
             }
         }
@@ -39,7 +53,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun HomeScreen(modifier: Modifier = Modifier) {
+fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
@@ -57,6 +71,12 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     ) {
         Text(text = "AI Assistant")
         Button(
+            onClick = onOpenChat,
+            modifier = Modifier.padding(top = 24.dp)
+        ) {
+            Text("Open Chat")
+        }
+        Button(
             onClick = {
                 if (Settings.canDrawOverlays(context)) {
                     context.startService(Intent(context, OverlayService::class.java))
@@ -69,7 +89,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     )
                 }
             },
-            modifier = Modifier.padding(top = 24.dp)
+            modifier = Modifier.padding(top = 12.dp)
         ) {
             Text("Show Overlay")
         }
