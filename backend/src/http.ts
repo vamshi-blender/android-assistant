@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { streamChat, type ChatEvent } from "./chat.js";
+import {
+  streamAssistantResponse,
+  type ChatStreamEvent,
+} from "./chat.js";
 
 type ChatRequest = IncomingMessage & { body?: unknown };
 
-function sendEvent(response: ServerResponse, event: ChatEvent): void {
+function sendEvent(response: ServerResponse, event: ChatStreamEvent): void {
   const { type, ...data } = event;
   response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
 }
@@ -64,7 +67,7 @@ export async function handleChat(
     });
     response.flushHeaders();
 
-    await streamChat(
+    await streamAssistantResponse(
       message,
       conversationId,
       {
@@ -83,7 +86,7 @@ export async function handleChat(
       response.writeHead(500, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: message }));
     } else {
-      sendEvent(response, { type: "error", message });
+      sendEvent(response, { type: "response.error", message });
       response.end();
     }
   }

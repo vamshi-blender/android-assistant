@@ -10,19 +10,44 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-sealed interface ChatEvent {
-    data class Session(val conversationId: String) : ChatEvent
-    data class Delta(val text: String) : ChatEvent
-    data object Done : ChatEvent
-    data class Error(val message: String) : ChatEvent
+sealed interface ChatStreamEvent {
+    data class ConversationReady(val conversationId: String) : ChatStreamEvent
+    data class AssistantTextDelta(
+        val delta: String,
+        val messageId: String,
+        val phase: AssistantOutputPhase,
+        val startsNewTextSegment: Boolean
+    ) : ChatStreamEvent
+    data class ToolExecutionStarted(
+        val callId: String,
+        val toolName: String,
+        val argumentsJson: String,
+        val startedAt: Long
+    ) : ChatStreamEvent
+    data class ToolExecutionCompleted(
+        val callId: String,
+        val outputPreview: String?,
+        val completedAt: Long
+    ) : ChatStreamEvent
+    data class ClientToolRequested(
+        val toolName: String,
+        val argumentsJson: String
+    ) : ChatStreamEvent
+    data object ResponseCompleted : ChatStreamEvent
+    data class ResponseError(val message: String) : ChatStreamEvent
 }
+
+enum class AssistantOutputPhase { COMMENTARY, FINAL_ANSWER }
 
 object ChatApi {
     // Localhost is forwarded to the development machine with `adb reverse`.
     // Replace this with the Vercel HTTPS URL for production.
     private const val CHAT_URL = "http://localhost:3000/api/chat"
 
-    fun streamMessage(message: String, conversationId: String?): Flow<ChatEvent> = channelFlow {
+    fun streamAssistantResponse(
+        userMessage: String,
+        conversationId: String?
+    ): Flow<ChatStreamEvent> = channelFlow {
         withContext(Dispatchers.IO) {
             var connection: HttpURLConnection? = null
             try {
@@ -35,7 +60,7 @@ object ChatApi {
                     setRequestProperty("Accept", "text/event-stream")
                 }
 
-                val requestJson = JSONObject().put("message", message).apply {
+                val requestJson = JSONObject().put("message", userMessage).apply {
                     conversationId?.let { put("conversationId", it) }
                     put(
                         "deviceTime",
@@ -48,7 +73,7 @@ object ChatApi {
 
                 if (connection.responseCode !in 200..299) {
                     val error = connection.errorStream?.bufferedReader()?.use { it.readText() }
-                    send(ChatEvent.Error(error ?: "Server error ${connection.responseCode}"))
+                    send(ChatStreamEvent.ResponseError(error ?: "Server error ${connection.responseCode}"))
                     return@withContext
                 }
 
@@ -62,10 +87,57 @@ object ChatApi {
                             line.isBlank() && eventName.isNotEmpty() -> {
                                 val data = JSONObject(dataLines.joinToString("\n"))
                                 when (eventName) {
-                                    "session" -> send(ChatEvent.Session(data.getString("conversationId")))
-                                    "delta" -> send(ChatEvent.Delta(data.getString("text")))
-                                    "done" -> send(ChatEvent.Done)
-                                    "error" -> send(ChatEvent.Error(data.optString("message", "Unknown error")))
+                                    "conversation.ready" -> send(
+                                        ChatStreamEvent.ConversationReady(data.getString("conversationId"))
+                                    )
+                                    "assistant.text.delta" -> send(
+                                        ChatStreamEvent.AssistantTextDelta(
+                                            delta = data.getString("delta"),
+                                            messageId = data.optString("messageId", "assistant"),
+                                            phase = if (data.optString("phase") == "commentary") {
+                                                AssistantOutputPhase.COMMENTARY
+                                            } else {
+                                                AssistantOutputPhase.FINAL_ANSWER
+                                            },
+                                            startsNewTextSegment = data.optBoolean(
+                                                "startsNewTextSegment",
+                                                false
+                                            )
+                                        )
+                                    )
+                                    "tool.execution.started" -> send(
+                                        ChatStreamEvent.ToolExecutionStarted(
+                                            callId = data.getString("callId"),
+                                            toolName = data.getString("name"),
+                                            argumentsJson = data.optJSONObject("arguments")
+                                                ?.takeIf { it.length() > 0 }
+                                                ?.toString(2)
+                                                ?: "",
+                                            startedAt = data.optLong("startedAt", System.currentTimeMillis())
+                                        )
+                                    )
+                                    "tool.execution.completed" -> send(
+                                        ChatStreamEvent.ToolExecutionCompleted(
+                                            callId = data.getString("callId"),
+                                            outputPreview = data.optString("output")
+                                                .takeIf { it.isNotEmpty() },
+                                            completedAt = data.optLong("completedAt", System.currentTimeMillis())
+                                        )
+                                    )
+                                    "client.tool.requested" -> send(
+                                        ChatStreamEvent.ClientToolRequested(
+                                            toolName = data.getString("name"),
+                                            argumentsJson = data.optJSONObject("arguments")
+                                                ?.toString()
+                                                ?: "{}"
+                                        )
+                                    )
+                                    "response.completed" -> send(ChatStreamEvent.ResponseCompleted)
+                                    "response.error" -> send(
+                                        ChatStreamEvent.ResponseError(
+                                            data.optString("message", "Unknown error")
+                                        )
+                                    )
                                 }
                                 eventName = ""
                                 dataLines.clear()
@@ -76,7 +148,11 @@ object ChatApi {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                send(ChatEvent.Error(error.message ?: "Unable to reach the AI backend"))
+                send(
+                    ChatStreamEvent.ResponseError(
+                        error.message ?: "Unable to reach the AI backend"
+                    )
+                )
             } finally {
                 connection?.disconnect()
             }
