@@ -41,7 +41,8 @@
             android:showWhenLocked="true"
             android:taskAffinity=""
             android:theme="@style/Theme.AIAssistant.Overlay"
-            android:turnScreenOn="true" />
+            android:turnScreenOn="true"
+            android:windowSoftInputMode="adjustResize" />
 
         <service
             android:name=".overlay.OverlayService"

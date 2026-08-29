@@ -30,4 +30,15 @@ class AssistantOverlayActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * Home and Recents background this activity rather than finishing it, which
+     * would leave a stale assistant panel to return to. Dismiss instead, so the
+     * lock-screen path matches the overlay-window path. Back already finishes
+     * by default.
+     */
+    override fun onPause() {
+        super.onPause()
+        if (!isFinishing) finish()
+    }
 }

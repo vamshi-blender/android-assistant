@@ -51,7 +51,7 @@ class MainActivity : ComponentActivity() {
                             onOpenChat = { showChat = true },
                             modifier = Modifier.padding(innerPadding)
                         )
-                    }
+                    } 
                 }
             }
         }
