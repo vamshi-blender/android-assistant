@@ -14,6 +14,7 @@ adb reverse tcp:3000 tcp:3000
 ```
 
 The app then reaches the backend through `http://localhost:3000`.
+Run the command again whenever the Android device reconnects or reboots.
 
 Test the SSE endpoint directly:
 
@@ -25,8 +26,17 @@ curl -N -X POST http://localhost:3000/api/chat \
 
 Send the returned `conversationId` with later messages to continue the same chat.
 
+Short M4A recordings can be transcribed with `gpt-transcribe` through the audio
+endpoint:
+
+```bash
+curl -X POST http://localhost:3000/api/transcribe \
+  -H "Content-Type: audio/mp4" \
+  --data-binary @recording.m4a
+```
+
 ## Vercel
 
 Create a Vercel project with this `backend` folder as its root directory, add
-`OPENAI_API_KEY` and optionally `OPENAI_MODEL`, then deploy. Update `CHAT_URL` in
-the Android `ChatApi.kt` file to the resulting HTTPS endpoint.
+`OPENAI_API_KEY` and optionally `OPENAI_MODEL`, then deploy. Update both backend
+URLs in the Android `ChatApi.kt` file to the resulting HTTPS endpoints.

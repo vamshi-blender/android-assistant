@@ -13,8 +13,17 @@ Three ways to summon it:
 | **Long-press the power button** | App set as the default assistant |
 | **"Show Overlay"** button in the app | — |
 
-Everything about the wake word runs **on-device** — no audio ever leaves the
-phone. Only the chat message itself goes to the backend.
+Everything about the wake word runs **on-device**. Audio recorded with the chat
+microphone button is sent to the backend for transcription; the always-on wake
+word audio never leaves the phone. Chat recording waits up to 5 seconds for
+speech, ends after 3 continuous seconds of silence, and never exceeds 30 seconds
+or 5 MB. Audio is discarded when no speech is detected.
+
+Voice activity uses normalized peak amplitude. Tune
+`VoiceActivityConfig.DEFAULT_AUDIO_THRESHOLD` in `VoiceActivityDetector.kt`
+(default `0.04`, valid range `0.0`–`1.0`) for the target device and environment.
+While speech is above that threshold, the red microphone button scales
+with the smoothed audio level without changing its layout or touch target.
 
 ---
 
@@ -88,8 +97,16 @@ the first build:
 adb reverse tcp:3000 tcp:3000    # so the app reaches the local backend
 ```
 
-`ChatApi.CHAT_URL` points at `http://localhost:3000/api/chat`; swap it for the
-Vercel HTTPS URL when deploying.
+`adb reverse` is required when testing on an emulator or a USB-connected phone
+because Android's `localhost` refers to the Android device, not the development
+computer. Run it again whenever the device reconnects or reboots:
+
+```powershell
+adb reverse tcp:3000 tcp:3000
+```
+
+The URLs in `ChatApi` point at `http://localhost:3000`; swap both for the Vercel
+HTTPS deployment URLs when deploying.
 
 ### 4. Permissions, in the app
 
@@ -279,7 +296,7 @@ your voice hits, since logcat names the match.
 | --- | --- |
 | [`MainActivity.kt`](app/src/main/java/com/vamshi/aiassistant/MainActivity.kt) | Home screen: chat, overlay, assistant picker, listener toggle |
 | [`ChatScreen.kt`](app/src/main/java/com/vamshi/aiassistant/ChatScreen.kt) | Chat UI — streams commentary and the final answer separately |
-| [`ChatApi.kt`](app/src/main/java/com/vamshi/aiassistant/ChatApi.kt) | SSE client; emits typed `ChatStreamEvent`s |
+| [`ChatApi.kt`](app/src/main/java/com/vamshi/aiassistant/ChatApi.kt) | Chat SSE and audio-transcription client |
 | [`DeviceClockToolExecutor.kt`](app/src/main/java/com/vamshi/aiassistant/DeviceClockToolExecutor.kt) | Runs client-side clock tools via `AlarmClock` intents |
 | [`assist/`](app/src/main/java/com/vamshi/aiassistant/assist/) | `VoiceInteractionService` trio that makes the app the default assistant |
 | [`overlay/AssistantTrigger.kt`](app/src/main/java/com/vamshi/aiassistant/overlay/AssistantTrigger.kt) | Single entry point; routes on lock state |

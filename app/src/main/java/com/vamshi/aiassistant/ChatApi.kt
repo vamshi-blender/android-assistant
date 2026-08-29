@@ -1,5 +1,6 @@
 package com.vamshi.aiassistant
 
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.ZoneId
@@ -43,6 +44,44 @@ object ChatApi {
     // Localhost is forwarded to the development machine with `adb reverse`.
     // Replace this with the Vercel HTTPS URL for production.
     private const val CHAT_URL = "http://localhost:3000/api/chat"
+    private const val TRANSCRIBE_URL = "http://localhost:3000/api/transcribe"
+
+    suspend fun transcribeAudio(audioFile: File): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = (URL(TRANSCRIBE_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 15_000
+                readTimeout = 60_000
+                doOutput = true
+                setRequestProperty("Content-Type", "audio/mp4")
+                setRequestProperty("Accept", "application/json")
+                setFixedLengthStreamingMode(audioFile.length())
+            }
+
+            try {
+                audioFile.inputStream().use { input ->
+                    connection.outputStream.use { output -> input.copyTo(output) }
+                }
+
+                val responseCode = connection.responseCode
+                val responseBody = (if (responseCode in 200..299) {
+                    connection.inputStream
+                } else {
+                    connection.errorStream
+                })?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+                val responseJson = if (responseBody.isBlank()) JSONObject() else JSONObject(responseBody)
+                if (responseCode !in 200..299) {
+                    error(responseJson.optString("error", "Transcription failed ($responseCode)"))
+                }
+
+                responseJson.optString("text").trim().takeIf { it.isNotEmpty() }
+                    ?: error("The transcription was empty")
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
 
     fun streamAssistantResponse(
         userMessage: String,

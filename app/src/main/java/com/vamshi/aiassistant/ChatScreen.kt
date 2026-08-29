@@ -1,24 +1,31 @@
 package com.vamshi.aiassistant
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,19 +47,31 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import com.vamshi.aiassistant.wakeword.WakeWordService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import android.widget.Toast
+import kotlin.math.sqrt
 
 private enum class ToolExecutionStatus { RUNNING, COMPLETED }
+
+private const val MIC_MAX_SCALE = 1.5f
+private const val MIC_LEVEL_FOR_MAX_SCALE = 0.35f
+private const val MIC_LEVEL_ATTACK = 0.45f
+private const val MIC_LEVEL_RELEASE = 0.18f
+private const val MIC_THRESHOLD_EXIT_RATIO = 0.8f
+private const val MIC_SCALE_ANIMATION_MS = 140
 
 private sealed interface AssistantActivityItem {
     val id: String
@@ -99,11 +119,139 @@ fun ChatScreen(modifier: Modifier = Modifier) {
     var draft by rememberSaveable { mutableStateOf("") }
     var conversationId by rememberSaveable { mutableStateOf<String?>(null) }
     var isStreaming by remember { mutableStateOf(false) }
+    var isPreparingRecording by remember { mutableStateOf(false) }
+    var isRecording by remember { mutableStateOf(false) }
+    var isTranscribing by remember { mutableStateOf(false) }
+    var micAudioLevel by remember { mutableFloatStateOf(0f) }
+    var micVoiceActive by remember { mutableStateOf(false) }
+    var resumeWakeWordAfterRecording by remember { mutableStateOf(false) }
     var nextMessageId by remember { mutableStateOf(1L) }
     var streamJob by remember { mutableStateOf<Job?>(null) }
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val audioRecorder = remember { ChatAudioRecorder(context.applicationContext) }
+    val voiceActivityConfig = remember {
+        VoiceActivityConfig(audioThreshold = VoiceActivityConfig.DEFAULT_AUDIO_THRESHOLD)
+    }
+
+    fun restoreWakeWordListener() {
+        if (resumeWakeWordAfterRecording) {
+            resumeWakeWordAfterRecording = false
+            WakeWordService.start(context)
+        }
+    }
+
+    fun resetMicVisual() {
+        micAudioLevel = 0f
+        micVoiceActive = false
+    }
+
+    fun finishRecording(endRequest: RecordingEndRequest? = null) {
+        if (!isRecording) return
+        isRecording = false
+        resetMicVisual()
+
+        val recording = runCatching {
+            audioRecorder.stop(alreadyStopped = endRequest?.recorderAlreadyStopped == true)
+        }
+            .onFailure { error ->
+                Toast.makeText(
+                    context,
+                    error.message ?: "Unable to stop recording",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .getOrNull()
+        restoreWakeWordListener()
+
+        val endMessage = when (endRequest?.reason) {
+            RecordingEndReason.NO_SPEECH -> "No speech detected"
+            RecordingEndReason.MAX_DURATION ->
+                "Recording stopped after ${voiceActivityConfig.maxRecordingDurationMs / 1_000} seconds"
+            RecordingEndReason.FILE_SIZE ->
+                "Recording stopped at ${ChatAudioRecorder.MAX_FILE_MEGABYTES} MB"
+            RecordingEndReason.SILENCE, null -> null
+        }
+        endMessage?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+
+        if (recording != null) {
+            if (!recording.speechDetected) {
+                recording.file.delete()
+                if (endRequest?.reason != RecordingEndReason.NO_SPEECH) {
+                    Toast.makeText(context, "No speech detected", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+
+            isTranscribing = true
+            scope.launch {
+                try {
+                    ChatApi.transcribeAudio(recording.file)
+                        .onSuccess { transcript -> draft = transcript }
+                        .onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                error.message ?: "Transcription failed",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                } finally {
+                    recording.file.delete()
+                    isTranscribing = false
+                }
+            }
+        }
+    }
+
+    fun beginRecording() {
+        if (isPreparingRecording || isRecording) return
+        isPreparingRecording = true
+        resetMicVisual()
+        resumeWakeWordAfterRecording = WakeWordService.listening.value
+        if (resumeWakeWordAfterRecording) WakeWordService.stop(context)
+
+        runCatching {
+            audioRecorder.start(
+                config = voiceActivityConfig,
+                onAudioLevel = { rawLevel ->
+                    val level = rawLevel.coerceIn(0f, 1f)
+                    val smoothing = if (level > micAudioLevel) {
+                        MIC_LEVEL_ATTACK
+                    } else {
+                        MIC_LEVEL_RELEASE
+                    }
+                    micAudioLevel += (level - micAudioLevel) * smoothing
+                    micVoiceActive = if (micVoiceActive) {
+                        level >= voiceActivityConfig.audioThreshold * MIC_THRESHOLD_EXIT_RATIO
+                    } else {
+                        level >= voiceActivityConfig.audioThreshold
+                    }
+                },
+                onEndRequested = ::finishRecording
+            )
+        }
+            .onSuccess {
+                isPreparingRecording = false
+                isRecording = true
+            }
+            .onFailure { error ->
+                isPreparingRecording = false
+                restoreWakeWordListener()
+                Toast.makeText(
+                    context,
+                    error.message ?: "Unable to start recording",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) beginRecording()
+        else Toast.makeText(context, "Microphone permission is required", Toast.LENGTH_LONG).show()
+    }
 
     fun newChat() {
         streamJob?.cancel()
@@ -119,7 +267,13 @@ fun ChatScreen(modifier: Modifier = Modifier) {
         if (index >= 0) messages[index] = update(messages[index])
     }
 
-    DisposableEffect(Unit) { onDispose { streamJob?.cancel() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            streamJob?.cancel()
+            audioRecorder.cancel()
+            restoreWakeWordListener()
+        }
+    }
     LaunchedEffect(
         messages.size,
         messages.lastOrNull()?.text,
@@ -127,6 +281,27 @@ fun ChatScreen(modifier: Modifier = Modifier) {
     ) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
+
+    val micScaleTarget = if (isRecording && micVoiceActive) {
+        val visualCeiling = maxOf(
+            MIC_LEVEL_FOR_MAX_SCALE,
+            voiceActivityConfig.audioThreshold + 0.01f
+        )
+        val visualRange = visualCeiling - voiceActivityConfig.audioThreshold
+        val intensity = ((micAudioLevel - voiceActivityConfig.audioThreshold) / visualRange)
+            .coerceIn(0f, 1f)
+        1f + (MIC_MAX_SCALE - 1f) * sqrt(intensity)
+    } else {
+        1f
+    }
+    val micScale by animateFloatAsState(
+        targetValue = micScaleTarget,
+        animationSpec = tween(
+            durationMillis = MIC_SCALE_ANIMATION_MS,
+            easing = FastOutSlowInEasing
+        ),
+        label = "microphone audio level"
+    )
 
     Column(modifier = modifier.fillMaxSize().imePadding()) {
         Row(
@@ -177,11 +352,56 @@ fun ChatScreen(modifier: Modifier = Modifier) {
                 onValueChange = { draft = it },
                 placeholder = { Text("Type a message") },
                 modifier = Modifier.weight(1f),
-                enabled = !isStreaming,
+                enabled = !isStreaming && !isPreparingRecording && !isRecording && !isTranscribing,
                 maxLines = 4
             )
             Button(
-                enabled = draft.isNotBlank() && !isStreaming,
+                enabled = isRecording ||
+                    (!isPreparingRecording && !isStreaming && !isTranscribing),
+                onClick = {
+                    if (isRecording) {
+                        finishRecording()
+                    } else if (
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        beginRecording()
+                    } else {
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                },
+                modifier = Modifier
+                    .size(48.dp)
+                    .graphicsLayer {
+                        scaleX = micScale
+                        scaleY = micScale
+                    }
+                    .semantics {
+                        contentDescription = if (isRecording) {
+                            "Stop voice recording"
+                        } else {
+                            "Start voice recording"
+                        }
+                    },
+                contentPadding = PaddingValues(0.dp),
+                colors = if (isRecording) {
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                } else {
+                    ButtonDefaults.buttonColors()
+                }
+            ) {
+                Text("m")
+            }
+            Button(
+                enabled = draft.isNotBlank() &&
+                    !isStreaming &&
+                    !isPreparingRecording &&
+                    !isRecording &&
+                    !isTranscribing,
+                modifier = Modifier.size(48.dp),
+                contentPadding = PaddingValues(0.dp),
                 onClick = {
                     val userText = draft.trim()
                     draft = ""
@@ -348,10 +568,8 @@ fun ChatScreen(modifier: Modifier = Modifier) {
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_huge_send),
-                    contentDescription = null
+                    contentDescription = "Send"
                 )
-                Spacer(Modifier.width(8.dp))
-                Text("Send")
             }
         }
     }

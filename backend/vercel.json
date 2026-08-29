@@ -3,6 +3,9 @@
   "functions": {
     "api/chat.ts": {
       "maxDuration": 60
+    },
+    "api/transcribe.ts": {
+      "maxDuration": 60
     }
   }
 }
