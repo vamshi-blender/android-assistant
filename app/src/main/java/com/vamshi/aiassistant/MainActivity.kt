@@ -1,7 +1,10 @@
 package com.vamshi.aiassistant
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -18,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,8 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.vamshi.aiassistant.overlay.OverlayService
 import com.vamshi.aiassistant.ui.theme.AIAssistantTheme
+import com.vamshi.aiassistant.wakeword.WakeWordService
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +67,16 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
     ) {
         if (Settings.canDrawOverlays(context)) {
             context.startService(Intent(context, OverlayService::class.java))
+        }
+    }
+
+    val listening by WakeWordService.listening.collectAsState()
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { granted ->
+        if (granted[Manifest.permission.RECORD_AUDIO] == true) {
+            WakeWordService.start(context)
         }
     }
 
@@ -103,6 +119,34 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
             modifier = Modifier.padding(top = 12.dp)
         ) {
             Text("Set as Default Assistant")
+        }
+        Button(
+            onClick = {
+                if (listening) {
+                    WakeWordService.stop(context)
+                } else {
+                    val needed = buildList {
+                        add(Manifest.permission.RECORD_AUDIO)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }.filter {
+                        ContextCompat.checkSelfPermission(context, it) !=
+                            PackageManager.PERMISSION_GRANTED
+                    }
+
+                    if (needed.isEmpty()) {
+                        WakeWordService.start(context)
+                    } else {
+                        micPermissionLauncher.launch(needed.toTypedArray())
+                    }
+                }
+            },
+            modifier = Modifier.padding(top = 12.dp)
+        ) {
+            // Deliberately not naming the phrase - it is defined in
+            // keywords.txt and the notification reports it from there.
+            Text(if (listening) "Stop Listening" else "Start Listening")
         }
     }
 }

@@ -11,3 +11,8 @@ local.properties
 backend/node_modules/
 backend/.env
 backend/.vercel/
+
+# Wake-word binaries (~63MB). Run scripts/fetch-wakeword-assets.sh to restore.
+/app/libs/*.aar
+/app/src/main/assets/sherpa-onnx-kws-*/*.onnx
+/app/src/main/assets/sherpa-onnx-kws-*/tokens.txt

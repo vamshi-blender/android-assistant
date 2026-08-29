@@ -2,4 +2,15 @@
 <resources>
 
     <style name="Theme.AIAssistant" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Lock-screen host for the assistant panel: fully transparent so the
+         panel appears to float over whatever is behind it, and no window
+         animation so it matches the instant overlay-window presentation. -->
+    <style name="Theme.AIAssistant.Overlay" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

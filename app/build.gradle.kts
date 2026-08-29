@@ -19,6 +19,13 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // The sherpa-onnx AAR ships four ABIs and most of its 49MB is
+            // native code. arm64 covers real devices, x86_64 covers emulators;
+            // dropping the other two roughly halves the APK.
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -34,10 +41,15 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
 dependencies {
+    // On-device wake-word / speech engine. Not published to Maven Central -
+    // fetched from GitHub releases by scripts/fetch-wakeword-assets.sh.
+    implementation(files("libs/sherpa-onnx-1.13.6.aar"))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
