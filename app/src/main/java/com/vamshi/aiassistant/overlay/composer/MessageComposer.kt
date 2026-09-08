@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,7 +22,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +49,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CancellationException
+import androidx.compose.ui.platform.LocalContext
+import com.vamshi.aiassistant.overlay.MicPermissionActivity
 
 /** What the composer is currently doing. */
 enum class ComposerMode { EDITING, RECORDING, TRANSCRIBING }
@@ -70,6 +74,9 @@ class ComposerState {
     /** Width of the single-line field, used to decide when to collapse back. */
     var collapsedFieldWidthPx by mutableFloatStateOf(0f)
 
+    /** Set while the mic permission prompt is up, so its result is acted on. */
+    var awaitingMicPermission by mutableStateOf(false)
+
     /** Drives the L -> S swap: any character counts, per the spec. */
     val hasText: Boolean get() = value.text.isNotEmpty()
 
@@ -82,7 +89,18 @@ class ComposerState {
         mode = ComposerMode.RECORDING
     }
 
+    /** Set by the Send button; routes the transcript straight to onSend instead of the input field for review. */
+    var sendDirectly = false
+        private set
+
     fun confirmRecording() {
+        sendDirectly = false
+        mode = ComposerMode.TRANSCRIBING
+    }
+
+    /** Skips the review step: the transcript is sent as-is once it lands. */
+    fun sendRecording() {
+        sendDirectly = true
         mode = ComposerMode.TRANSCRIBING
     }
 
@@ -94,11 +112,16 @@ class ComposerState {
         mode = ComposerMode.EDITING
     }
 
-    /** Appends the transcript to whatever was already typed. */
-    fun applyTranscript(transcript: String) {
+    /** Combines the transcript with whatever was already typed, same rule for both review and direct send. */
+    private fun mergedWithSnapshot(transcript: String): String {
         val existing = snapshotValue?.text ?: value.text
         val separator = if (existing.isEmpty() || existing.endsWith(" ")) "" else " "
-        val merged = existing + separator + transcript
+        return existing + separator + transcript
+    }
+
+    /** Appends the transcript to whatever was already typed. */
+    fun applyTranscript(transcript: String) {
+        val merged = mergedWithSnapshot(transcript)
         value = TextFieldValue(merged, selection = TextRange(merged.length))
         snapshotValue = null
         mode = ComposerMode.EDITING
@@ -106,9 +129,33 @@ class ComposerState {
         // decided there from the measured width, not guessed here.
     }
 
+    /**
+     * Text to hand to onSend when the transcript skips the input field
+     * entirely. Clears the snapshot the same way [applyTranscript] does, but
+     * leaves [value] and [mode] to the caller - a failed send needs to fall
+     * back to review rather than to a blank field.
+     */
+    fun consumeTranscriptForSend(transcript: String): String {
+        val merged = mergedWithSnapshot(transcript)
+        snapshotValue = null
+        return merged.trim()
+    }
+
+    /**
+     * Shows already-merged text for review after a direct send was refused.
+     * Distinct from [applyTranscript]: that one merges its argument against
+     * the snapshot, which [consumeTranscriptForSend] has already consumed -
+     * calling it here would merge the same text in twice.
+     */
+    fun showForReview(text: String) {
+        value = TextFieldValue(text, selection = TextRange(text.length))
+        mode = ComposerMode.EDITING
+    }
+
     fun clear() {
         value = TextFieldValue("")
         expanded = false
+        mode = ComposerMode.EDITING
     }
 }
 
@@ -129,26 +176,70 @@ fun MessageComposer(
     state: ComposerState,
     amplitudes: Flow<Float>,
     transcribe: suspend () -> String,
-    onSend: (String) -> Unit,
+    onTranscriptionError: (Throwable) -> Unit,
+    onSend: (String) -> Boolean,
+    onStartRecording: () -> Boolean,
+    onCancelRecording: () -> Unit,
     onLiveSession: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var containerWidthPx by remember { mutableFloatStateOf(0f) }
 
-    // Latest amplitude, sampled by the waveform on its own cadence.
-    var level by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(state.mode) {
-        if (state.mode == ComposerMode.RECORDING) {
-            amplitudes.collect { level = it }
+    // Amplitude accumulated between the waveform's samples.
+    //
+    // The source emits roughly every 64ms while the waveform samples every
+    // 200ms, so reading only the newest emission would keep one frame in three
+    // and throw the rest away - a bar could land on a pause between syllables
+    // and read near-silent during continuous speech. Peak-holding across the
+    // interval instead means each bar reflects the loudest moment it covers,
+    // which is what the reference gets for free by running RMS over a window
+    // at sample time.
+    val meter = remember { AmplitudeMeter() }
+    val context = LocalContext.current
+
+    // Start recording as soon as the prompt comes back granted, so the user
+    // does not have to tap the mic a second time.
+    LaunchedEffect(Unit) {
+        MicPermissionActivity.results.collect { granted ->
+            if (state.awaitingMicPermission) {
+                state.awaitingMicPermission = false
+                if (granted && onStartRecording()) state.beginRecording()
+            }
         }
     }
 
-    // Mock transcription. Cancelling the effect (mode leaving TRANSCRIBING)
-    // cancels the work, which is exactly what the X button needs.
+    LaunchedEffect(state.mode) {
+        if (state.mode == ComposerMode.RECORDING) {
+            meter.reset()
+            amplitudes.collect { meter.push(it) }
+        }
+    }
+
+    // The upload is owned by this effect, so leaving TRANSCRIBING cancels the
+    // request and lets the X button abandon slow transcription safely.
     LaunchedEffect(state.mode) {
         if (state.mode == ComposerMode.TRANSCRIBING) {
-            val transcript = transcribe()
-            state.applyTranscript(transcript)
+            try {
+                val transcript = transcribe()
+                if (state.sendDirectly) {
+                    val text = state.consumeTranscriptForSend(transcript)
+                    // onSend can refuse (e.g. a response is still streaming);
+                    // fall back to showing the transcript for review rather
+                    // than silently dropping it.
+                    if (text.isNotEmpty() && onSend(text)) {
+                        state.clear()
+                    } else {
+                        state.showForReview(text)
+                    }
+                } else {
+                    state.applyTranscript(transcript)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                state.cancelRecording()
+                onTranscriptionError(error)
+            }
         }
     }
 
@@ -164,28 +255,60 @@ fun MessageComposer(
         // Enter/Send key so they cannot drift apart.
         val submit: () -> Unit = {
             val text = state.sendableText
-            if (text.isNotEmpty()) {
-                onSend(text)
+            if (text.isNotEmpty() && onSend(text)) {
                 state.clear()
             }
         }
 
         if (state.mode == ComposerMode.EDITING) {
-            EditingLayout(state, containerWidthPx, submit, onLiveSession)
+            EditingLayout(state, containerWidthPx, submit, onStartRecording, onLiveSession)
         } else {
             // Recording and transcribing both show the waveform in place of
             // the input; an expanded text area is hidden for the duration.
+            // Cancel sits alone on the far left - furthest from the thumb's
+            // natural resting position on the right, so a hasty tap lands on
+            // Confirm or Send rather than aborting the recording.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(GAP)
             ) {
-                Waveform(
-                    levels = { level },
-                    frozen = state.mode == ComposerMode.TRANSCRIBING,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(INPUT_MIN_HEIGHT)
+                // Cancel stays live through transcription so a slow transcript
+                // can always be abandoned without losing the typed text.
+                ActionButton(
+                    label = "X",
+                    onClick = {
+                        onCancelRecording()
+                        state.cancelRecording()
+                    }
                 )
+                if (state.mode == ComposerMode.TRANSCRIBING) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(ROW_GAP),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(INPUT_MIN_HEIGHT)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = OverlayStyle.Placeholder,
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "Transcribing…",
+                            color = OverlayStyle.Placeholder,
+                            fontSize = 15.sp
+                        )
+                    }
+                } else {
+                    Waveform(
+                        levels = meter::take,
+                        frozen = false,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(INPUT_MIN_HEIGHT)
+                    )
+                }
                 RecordingActions(state)
             }
         }
@@ -208,6 +331,7 @@ private fun EditingLayout(
     state: ComposerState,
     containerWidthPx: Float,
     onSubmit: () -> Unit,
+    onStartRecording: () -> Boolean,
     onLiveSession: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -218,7 +342,7 @@ private fun EditingLayout(
     Layout(
         contents = listOf(
             { InputField(state, containerWidthPx, onSubmit) },
-            { EditingActions(state, onSubmit, onLiveSession) },
+            { EditingActions(state, onSubmit, onStartRecording, onLiveSession) },
         )
     ) { (inputMeasurables, actionMeasurables), constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
@@ -350,41 +474,46 @@ private fun InputField(
 private fun EditingActions(
     state: ComposerState,
     onSubmit: () -> Unit,
+    onStartRecording: () -> Boolean,
     onLiveSession: () -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(GAP)) {
-        ActionButton(label = "M", onClick = { state.beginRecording() })
+        val context = LocalContext.current
+        ActionButton(
+            label = "M",
+            onClick = {
+                // An overlay window has no Activity to prompt from, so hand off
+                // to MicPermissionActivity and start recording only once the
+                // user has actually granted it - otherwise AudioRecord is
+                // refused and the waveform draws synthetic levels instead.
+                if (MicPermissionActivity.hasPermission(context)) {
+                    if (onStartRecording()) state.beginRecording()
+                } else {
+                    state.awaitingMicPermission = true
+                    MicPermissionActivity.request(context)
+                }
+            }
+        )
         if (state.hasText) {
             ActionButton(label = "S", accent = true, onClick = onSubmit)
         } else {
-            ActionButton(label = "L", onClick = onLiveSession)
+            ActionButton(label = "L", accent = true, onClick = onLiveSession)
         }
     }
 }
 
 @Composable
 private fun RecordingActions(state: ComposerState) {
+    // Both stay on screen while transcribing rather than being replaced by a
+    // spinner, so the layout does not jump the moment it finishes - only
+    // their enabled state changes.
+    val enabled = state.mode != ComposerMode.TRANSCRIBING
     Row(horizontalArrangement = Arrangement.spacedBy(GAP)) {
-        // Cancel stays live through transcription so a slow transcript can
-        // always be abandoned without losing the typed text.
-        ActionButton(label = "X", onClick = { state.cancelRecording() })
-
-        if (state.mode == ComposerMode.TRANSCRIBING) {
-            Box(
-                modifier = Modifier
-                    .size(BUTTON_SIZE)
-                    .background(OverlayStyle.ButtonBackground, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp
-                )
-            }
-        } else {
-            ActionButton(label = "✓", accent = true, onClick = { state.confirmRecording() })
-        }
+        // Confirm: transcribe, then show the text for review before it is
+        // sent. Send: transcribe and send immediately, skipping review - the
+        // fast path for a query the user trusts was heard correctly.
+        ActionButton(label = "✓", enabled = enabled, onClick = { state.confirmRecording() })
+        ActionButton(label = "S", accent = true, enabled = enabled, onClick = { state.sendRecording() })
     }
 }
 
@@ -392,6 +521,7 @@ private fun RecordingActions(state: ComposerState) {
 private fun ActionButton(
     label: String,
     accent: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Box(
@@ -401,9 +531,14 @@ private fun ActionButton(
                 if (accent) OverlayStyle.AccentBackground else OverlayStyle.ButtonBackground,
                 CircleShape
             )
+            // Disabled buttons stay visible rather than disappearing, so
+            // fading their content is enough to read as "not tappable yet"
+            // without the layout shifting.
+            .alpha(if (enabled) 1f else DISABLED_ALPHA)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
+                enabled = enabled,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
@@ -423,3 +558,4 @@ private val INPUT_MIN_HEIGHT = 36.dp
 private val INPUT_MAX_HEIGHT = 120.dp
 private const val FALLBACK_INPUT_FRACTION = 0.7f
 private const val COLLAPSE_MARGIN = 0.92f
+private const val DISABLED_ALPHA = 0.4f

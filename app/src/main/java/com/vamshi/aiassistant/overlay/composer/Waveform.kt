@@ -2,10 +2,12 @@ package com.vamshi.aiassistant.overlay.composer
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.LaunchedEffect
@@ -51,19 +53,37 @@ fun Waveform(
     // state during draw can retrigger layout and spin.
     val density = LocalDensity.current
     val stepPx = with(density) { (barWidth + barGap).toPx() }
-    val maxBars = remember(widthPx, stepPx) {
-        if (stepPx <= 0f) 2 else ceil(widthPx / stepPx).toInt() + 2
+
+    // Capacity has to reach the sampling loop as *state*, not as a captured
+    // value. The loop is keyed on `frozen` alone, so it starts on the first
+    // composition - before onSizeChanged has reported a width. A plain `val`
+    // captured there would freeze at the zero-width fallback of 2 bars and
+    // never update, leaving two bars pinned at the right edge and idle dots
+    // for the rest of the strip instead of a scrolling history.
+    val maxBars by remember {
+        derivedStateOf {
+            if (stepPx <= 0f) 2 else ceil(widthPx / stepPx).toInt() + 2
+        }
     }
+
+    // `levels` may be a fresh lambda on every recomposition; the loop only
+    // captures the one it launched with, so read through the latest instead.
+    val currentLevels by rememberUpdatedState(levels)
 
     LaunchedEffect(frozen) {
         if (frozen) return@LaunchedEffect
+        // A new recording starts from an empty strip rather than resuming the
+        // previous one's tail, matching the reference implementation, which
+        // clears its bar arrays on every start().
+        bars.clear()
+        lastSampleNanos = 0L
         while (true) {
             withFrameNanos { frame ->
                 nowNanos = frame
                 if (lastSampleNanos == 0L) lastSampleNanos = frame
                 if (frame - lastSampleNanos >= SAMPLE_MS * 1_000_000L) {
                     lastSampleNanos = frame
-                    bars.add(Bar(level = levels().coerceIn(0f, 1f), startedAtNanos = frame))
+                    bars.add(Bar(level = currentLevels().coerceIn(0f, 1f), startedAtNanos = frame))
                     while (bars.size > maxBars) bars.removeAt(0)
                 }
             }

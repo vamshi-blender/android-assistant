@@ -71,21 +71,40 @@ class MicAmplitudeSource(private val context: Context) : AmplitudeSource {
 
         if (recorder == null) {
             // Most likely the wake-word listener already owns the microphone.
-            Log.w(TAG, "microphone unavailable, using synthetic levels")
+            Log.w(TAG, "microphone unavailable (construct failed), using synthetic levels")
             emitAll(MockAmplitudeSource().levels())
             return@flow
         }
 
+        // startRecording() does not throw when the capture slot is refused - it
+        // returns quietly and leaves the recorder STOPPED, after which read()
+        // returns 0 forever. Without this check the loop below would spin and
+        // emit nothing at all, drawing a flat strip with no clue as to why.
+        recorder.startRecording()
+        if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            Log.w(TAG, "microphone refused to start, using synthetic levels")
+            runCatching { recorder.stop() }
+            recorder.release()
+            emitAll(MockAmplitudeSource().levels())
+            return@flow
+        }
+        Log.i(TAG, "microphone open, streaming live levels")
+
         val buffer = ShortArray(FRAME)
+        var emitted = 0
         try {
-            recorder.startRecording()
             while (currentCoroutineContext().isActive) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read <= 0) {
                     delay(POLL_MS)
                     continue
                 }
-                emit(normalise(buffer, read))
+                val level = normalise(buffer, read)
+                // Periodic proof that live audio is reaching the waveform, and
+                // at what magnitude - the difference between "mic is dead" and
+                // "mic works but gain is wrong" is invisible otherwise.
+                if (emitted++ % LOG_EVERY == 0) Log.d(TAG, "level=%.3f".format(level))
+                emit(level)
             }
         } finally {
             runCatching { recorder.stop() }
@@ -106,7 +125,13 @@ class MicAmplitudeSource(private val context: Context) : AmplitudeSource {
             sumSquares += deviation * deviation
         }
         val rms = sqrt(sumSquares / count)
-        return min(1.0, (rms * GAIN).pow(COMPRESSION)).toFloat()
+
+        // Subtract a noise floor before boosting. GAIN is high enough that raw
+        // room tone would otherwise be lifted into permanently tall bars, which
+        // reads as an unresponsive waveform just as much as one that is too
+        // quiet - the strip needs somewhere to fall back to between words.
+        val aboveFloor = ((rms - NOISE_FLOOR) / (1.0 - NOISE_FLOOR)).coerceAtLeast(0.0)
+        return min(1.0, (aboveFloor * GAIN).pow(COMPRESSION)).toFloat()
     }
 
     private companion object {
@@ -114,8 +139,15 @@ class MicAmplitudeSource(private val context: Context) : AmplitudeSource {
         const val SAMPLE_RATE = 16_000
         const val FRAME = 1024
         const val POLL_MS = 50L
-        const val GAIN = 9.0
-        const val COMPRESSION = 0.45
+        // Tuned well above the reference web implementation's 9.0: that reads
+        // from a WebAudio analyser fed by a browser-processed stream (automatic
+        // gain control and noise suppression already applied), whereas
+        // AudioRecord hands over comparatively quiet raw PCM - so matching the
+        // numbers meant matching the response only in name.
+        const val GAIN = 22.0
+        const val COMPRESSION = 0.40
+        const val NOISE_FLOOR = 0.006
+        const val LOG_EVERY = 30
     }
 }
 
@@ -133,5 +165,38 @@ class MockAmplitudeSource : AmplitudeSource {
             t += 0.18
             delay(50)
         }
+    }
+}
+
+/**
+ * Peak-holds levels between the waveform's samples.
+ *
+ * [MicAmplitudeSource] emits about every 64ms (1024 frames at 16kHz) while
+ * [Waveform] samples every 200ms, so a bar that read only the newest emission
+ * would represent one arbitrary third of the interval it covers. Holding the
+ * peak until it is taken means each bar reflects the loudest moment in its own
+ * window - the same effect the reference implementation gets from running RMS
+ * over an analyser window at sample time.
+ *
+ * Not thread-safe by design; the mic flow writes on the main thread after
+ * [kotlinx.coroutines.flow.Flow] collection and the waveform reads on the frame
+ * callback, both on the same dispatcher.
+ */
+class AmplitudeMeter {
+    private var peak = 0f
+
+    fun push(level: Float) {
+        if (level > peak) peak = level
+    }
+
+    /** Returns the peak since the last call and starts a new interval. */
+    fun take(): Float {
+        val value = peak
+        peak = 0f
+        return value
+    }
+
+    fun reset() {
+        peak = 0f
     }
 }

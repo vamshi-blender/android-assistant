@@ -64,7 +64,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
-private enum class ToolExecutionStatus { RUNNING, COMPLETED }
+internal enum class ToolExecutionStatus { RUNNING, COMPLETED }
 
 private const val MIC_MAX_SCALE = 1.5f
 private const val MIC_LEVEL_FOR_MAX_SCALE = 0.35f
@@ -73,7 +73,7 @@ private const val MIC_LEVEL_RELEASE = 0.18f
 private const val MIC_THRESHOLD_EXIT_RATIO = 0.8f
 private const val MIC_SCALE_ANIMATION_MS = 140
 
-private sealed interface AssistantActivityItem {
+internal sealed interface AssistantActivityItem {
     val id: String
 
     data class ProgressUpdate(
@@ -91,7 +91,7 @@ private sealed interface AssistantActivityItem {
     ) : AssistantActivityItem
 }
 
-private data class ChatMessage(
+internal data class ChatMessage(
     val id: Long,
     val text: String,
     val isHuman: Boolean,
@@ -103,7 +103,7 @@ private data class ChatMessage(
     val isActivityExpanded: Boolean = true
 )
 
-private fun appendTextDelta(
+internal fun appendTextDelta(
     current: String,
     delta: String,
     startsNewTextSegment: Boolean

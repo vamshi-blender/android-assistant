@@ -44,6 +44,13 @@
             android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".overlay.MicPermissionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AIAssistant.Overlay" />
+
         <service
             android:name=".overlay.OverlayService"
             android:exported="false" />
