@@ -7,13 +7,9 @@ export type DeviceContext = {
     timeZoneId: string;
     receivedAtServerEpochMillis: number;
   };
-  emitClientToolRequest: (
-    name: string,
-    arguments_: Record<string, unknown>,
-  ) => void;
+  toolResults?: Record<string, DeviceToolResult>;
 };
 
-const emptyParameters = z.object({});
 const setAlarmParameters = z.object({
   hour: z.number().int().min(0).max(23).describe("Hour in 24-hour local time"),
   minute: z.number().int().min(0).max(59),
@@ -71,68 +67,19 @@ const clockActionParameters = z.object({
   mode: dismissAlarmParameters.shape.mode.optional(),
 });
 
-function dispatchDeviceAction(
-  context: DeviceContext | undefined,
-  name: string,
-  arguments_: Record<string, unknown>,
-): string {
-  if (!context) {
-    return JSON.stringify({ status: "failed", error: "Device context is unavailable." });
-  }
-
-  context.emitClientToolRequest(name, arguments_);
-  return JSON.stringify({
-    status: "dispatched_to_android",
-    action: name,
-    note: "The Android device will pass this request to its default Clock app.",
-  });
-}
-
-const getDeviceTime = tool<typeof emptyParameters, DeviceContext>({
-  name: "get_device_time",
-  description:
-    "Get the current date and time from the user's Android device. Use this for current time/date and when resolving relative alarm requests.",
-  parameters: emptyParameters,
-  execute: (_input, runContext) => {
-    const deviceTime = runContext?.context.deviceTime;
-    if (!deviceTime) return "Device time is unavailable.";
-
-    const elapsedMillis = Math.max(
-      0,
-      Date.now() - deviceTime.receivedAtServerEpochMillis,
-    );
-    const currentDeviceEpochMillis = deviceTime.epochMillis + elapsedMillis;
-
-    try {
-      const formatted = new Intl.DateTimeFormat("en-US", {
-        dateStyle: "full",
-        timeStyle: "long",
-        timeZone: deviceTime.timeZoneId,
-      }).format(new Date(currentDeviceEpochMillis));
-      return JSON.stringify({
-        currentDeviceTime: formatted,
-        timeZone: deviceTime.timeZoneId,
-        epochMillis: currentDeviceEpochMillis,
-        source: "android_device_clock",
-      });
-    } catch {
-      return JSON.stringify({
-        currentDeviceTime: new Date(currentDeviceEpochMillis).toISOString(),
-        timeZone: deviceTime.timeZoneId,
-        epochMillis: currentDeviceEpochMillis,
-        source: "android_device_clock",
-      });
-    }
-  },
-});
+export type DeviceToolResult = {
+  status: "succeeded" | "failed" | "unknown" | "requires_user_action";
+  message: string;
+};
 
 const manageDeviceClock = tool<typeof clockActionParameters, DeviceContext>({
   name: "manage_device_clock",
   description:
     "Perform one supported action in Android's default Clock app. Actions: set_alarm needs hour/minute and may include label, repeatDays, silent, and vibrate; start_timer needs durationSeconds and may include label; show_alarms and show_timers open their Clock pages; snooze_alarm may include durationMinutes; dismiss_alarm needs mode (next, all, label, or time), plus label for label mode or hour/minute for time mode; dismiss_expired_timers dismisses all expired timers. Dismissing is supported and is distinct from deleting or explicitly disabling an entry.",
   parameters: clockActionParameters,
-  execute: (input, runContext) => {
-    const { action, ...arguments_ } = input;
+  needsApproval: true, // Pause the run until Android returns the actual result.
+  execute: (input, runContext, details) => {
+    const { action } = input;
     if (action === "set_alarm" && (input.hour === undefined || input.minute === undefined)) {
       return JSON.stringify({ status: "failed", error: "hour and minute are required" });
     }
@@ -148,14 +95,16 @@ const manageDeviceClock = tool<typeof clockActionParameters, DeviceContext>({
     if (action === "dismiss_alarm" && input.mode === "time" && input.hour === undefined) {
       return JSON.stringify({ status: "failed", error: "hour is required for time mode" });
     }
-    return dispatchDeviceAction(runContext?.context, action, arguments_);
+    const callId = details?.toolCall?.callId;
+    const result = callId ? runContext?.context.toolResults?.[callId] : undefined;
+    return JSON.stringify(result ?? { status: "unknown", message: "No device result was received. Do not retry automatically." });
   },
 });
 
 export const assistantAgent = new Agent<DeviceContext>({
   name: "Mobile assistant",
   instructions:
-    "You are a helpful mobile AI assistant. Be accurate, friendly, and concise. Call get_device_time before resolving relative dates or times. Use manage_device_clock for every supported alarm or timer request: setting alarms, starting timers, opening alarms or timers, snoozing, dismissing alarms (next, all, by label, or by time), and dismissing expired timers. Always perform an explicitly requested supported action. Do not confuse dismissing with deleting or explicitly disabling: dismiss_alarm is supported. Android does not expose portable APIs to read Clock entries into chat, edit or delete them, explicitly enable/disable arbitrary entries, or pause/resume timers. For an unsupported request, explain the limitation and offer to open the relevant Clock page, but do not open it unless the user explicitly asks you to. Before a tool call, send a brief commentary progress update. Use commentary only for progress and put the completed response in the final answer phase.",
+    "You are a helpful mobile AI assistant. Be accurate, friendly, and concise. Every user message is preceded by a <current_time> tag giving the user's device time, converted to India (Asia/Kolkata) — treat it as authoritative for resolving relative dates or times, and never ask the user what time it is. Use manage_device_clock for every supported alarm or timer request: setting alarms, starting timers, opening alarms or timers, snoozing, dismissing alarms (next, all, by label, or by time), and dismissing expired timers. Always perform an explicitly requested supported action. Do not confuse dismissing with deleting or explicitly disabling: dismiss_alarm is supported. Android does not expose portable APIs to read Clock entries into chat, edit or delete them, explicitly enable/disable arbitrary entries, or pause/resume timers. For an unsupported request, explain the limitation and offer to open the relevant Clock page, but do not open it unless the user explicitly asks you to. Only claim success when the device tool result status is succeeded. Report failed, unknown, or requires_user_action results accurately. Never automatically retry an unknown Clock action because it may already have happened. Clock changes require this app to be the default Android assistant and a Clock app supporting voice interaction. Before a tool call, send a brief commentary progress update. Use commentary only for progress and put the completed response in the final answer phase.",
   model: process.env.OPENAI_MODEL ?? "gpt-5.6",
-  tools: [getDeviceTime, manageDeviceClock],
+  tools: [manageDeviceClock],
 });

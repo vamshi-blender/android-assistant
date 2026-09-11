@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   streamAssistantResponse,
@@ -31,6 +32,8 @@ export async function handleChat(
 
   try {
     const body = (await readBody(request)) as {
+      continuation?: unknown;
+      toolResults?: unknown;
       message?: unknown;
       conversationId?: unknown;
       deviceTime?: unknown;
@@ -42,7 +45,12 @@ export async function handleChat(
       | { epochMillis?: unknown; timeZoneId?: unknown }
       | undefined;
 
-    if (!message) {
+    const continuation = typeof body.continuation === "string" ? body.continuation : undefined;
+    const toolResults = body.toolResults === undefined ? undefined : z.record(z.string(), z.object({
+      status: z.enum(["succeeded", "failed", "unknown", "requires_user_action"]),
+      message: z.string().max(2000),
+    })).parse(body.toolResults);
+    if (!message && !continuation) {
       response.writeHead(400, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "message is required" }));
       return;
@@ -71,6 +79,7 @@ export async function handleChat(
       message,
       conversationId,
       {
+        toolResults,
         deviceTime: {
           epochMillis: rawDeviceTime.epochMillis,
           timeZoneId: rawDeviceTime.timeZoneId,
@@ -78,6 +87,7 @@ export async function handleChat(
         },
       },
       (event) => sendEvent(response, event),
+      continuation,
     );
     response.end();
   } catch (error) {

@@ -64,7 +64,14 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
-internal enum class ToolExecutionStatus { RUNNING, COMPLETED }
+internal enum class ToolExecutionStatus { RUNNING, COMPLETED, FAILED, UNCONFIRMED }
+
+internal fun toolResultStatus(output: String?): ToolExecutionStatus =
+    when (runCatching { org.json.JSONObject(output.orEmpty()).optString("status") }.getOrNull()) {
+        "succeeded" -> ToolExecutionStatus.COMPLETED
+        "failed" -> ToolExecutionStatus.FAILED
+        else -> ToolExecutionStatus.UNCONFIRMED
+    }
 
 private const val MIC_MAX_SCALE = 1.5f
 private const val MIC_LEVEL_FOR_MAX_SCALE = 0.35f
@@ -416,7 +423,7 @@ fun ChatScreen(modifier: Modifier = Modifier) {
                     isStreaming = true
 
                     streamJob = scope.launch {
-                        ChatApi.streamAssistantResponse(userText, conversationId).collect { event ->
+                        ChatApi.streamAssistantResponse(userText, conversationId, context).collect { event ->
                             when (event) {
                                 is ChatStreamEvent.ConversationReady -> {
                                     conversationId = event.conversationId
@@ -509,25 +516,12 @@ fun ChatScreen(modifier: Modifier = Modifier) {
                                                 item.callId == event.callId
                                             ) {
                                                 item.copy(
-                                                    status = ToolExecutionStatus.COMPLETED,
+                                                    status = toolResultStatus(event.outputPreview),
                                                     outputPreview = event.outputPreview
                                                 )
                                             } else item
                                         }
                                         current.copy(activityItems = updatedItems)
-                                    }
-                                }
-                                is ChatStreamEvent.ClientToolRequested -> {
-                                    DeviceClockToolExecutor.execute(
-                                        context,
-                                        event.toolName,
-                                        event.argumentsJson
-                                    ).onFailure { error ->
-                                        Toast.makeText(
-                                            context,
-                                            error.message ?: "Clock action failed",
-                                            Toast.LENGTH_LONG
-                                        ).show()
                                     }
                                 }
                                 ChatStreamEvent.ResponseCompleted -> {
@@ -716,7 +710,13 @@ private fun ToolExecutionRow(item: AssistantActivityItem.ToolExecution) {
             if (item.status == ToolExecutionStatus.RUNNING) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
             } else {
-                Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (item.status == ToolExecutionStatus.COMPLETED) "\u2713"
+                        else if (item.status == ToolExecutionStatus.FAILED) "Failed" else "Unconfirmed",
+                    color = if (item.status == ToolExecutionStatus.COMPLETED)
+                        MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold
+                )
             }
             Text(
                 text = item.toolName.split('_').joinToString(" ") { word ->

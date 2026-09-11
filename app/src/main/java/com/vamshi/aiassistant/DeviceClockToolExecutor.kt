@@ -1,15 +1,23 @@
 package com.vamshi.aiassistant
 
-import android.content.ActivityNotFoundException
+import com.vamshi.aiassistant.assist.ClockVoiceBridge
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.content.Context
 import android.content.Intent
 import android.provider.AlarmClock
 import java.util.Calendar
 import org.json.JSONObject
 
+data class DeviceToolResult(val status: String, val message: String) {
+    fun toJson(): JSONObject = JSONObject().put("status", status).put("message", message)
+}
+
 object DeviceClockToolExecutor {
-    fun execute(context: Context, toolName: String, argumentsJson: String): Result<Unit> =
-        runCatching {
+    suspend fun execute(context: Context, toolName: String, argumentsJson: String): DeviceToolResult =
+        withContext(Dispatchers.Main.immediate) {
+          try {
             val arguments = JSONObject(argumentsJson)
             val intent = when (toolName) {
                 "set_alarm" -> setAlarmIntent(arguments)
@@ -22,11 +30,18 @@ object DeviceClockToolExecutor {
                 else -> error("Unsupported device clock tool: $toolName")
             }.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-            try {
+            if (toolName == "show_alarms" || toolName == "show_timers") {
                 context.startActivity(intent)
-            } catch (_: ActivityNotFoundException) {
-                error("No installed Clock app supports this action")
+                DeviceToolResult("succeeded", "Opened the requested Clock page.")
+            } else {
+                intent.putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                ClockVoiceBridge.execute(intent)
             }
+          } catch (error: CancellationException) {
+            throw error
+          } catch (error: Exception) {
+            DeviceToolResult("failed", error.message ?: "Clock action failed")
+          }
         }
 
     private fun setAlarmIntent(arguments: JSONObject) =
@@ -37,7 +52,7 @@ object DeviceClockToolExecutor {
             arguments.optionalString("label")?.let {
                 putExtra(AlarmClock.EXTRA_MESSAGE, it)
             }
-            if (arguments.has("vibrate")) {
+            if (arguments.has("vibrate") && !arguments.isNull("vibrate")) {
                 putExtra(AlarmClock.EXTRA_VIBRATE, arguments.getBoolean("vibrate"))
             }
             if (arguments.optBoolean("silent", false)) {
@@ -65,7 +80,7 @@ object DeviceClockToolExecutor {
 
     private fun snoozeAlarmIntent(arguments: JSONObject) =
         Intent(AlarmClock.ACTION_SNOOZE_ALARM).apply {
-            if (arguments.has("durationMinutes")) {
+            if (arguments.has("durationMinutes") && !arguments.isNull("durationMinutes")) {
                 putExtra(
                     AlarmClock.EXTRA_ALARM_SNOOZE_DURATION,
                     arguments.getInt("durationMinutes")

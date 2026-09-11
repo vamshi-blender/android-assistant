@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx --env-file=.env src/server.ts",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
     "start": "tsx --env-file=.env src/server.ts"
   },
   "dependencies": {

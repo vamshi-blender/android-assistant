@@ -297,16 +297,19 @@ PhoneControlToolExecutor.kt   maps name → Layer 0/1/2 call → returns a resul
 | `res/xml/accessibility_service_config.xml` | **New.** Service capabilities declaration |
 | `AndroidManifest.xml` | Register the service with `BIND_ACCESSIBILITY_SERVICE` |
 
-### One gap to close
+### Result channel (implemented for Clock)
 
-The clock tools are **fire-and-forget** — the executor returns `Result<Unit>` and
-the model never learns what happened. UI automation *needs a result channel*:
-the model must know whether a tap landed, and what the screen looks like now.
+The original dispatch-only Clock flow above has been replaced. The backend now
+pauses the Agents SDK run, emits `client.tools.requested` with call IDs and an
+encrypted continuation, and ends the stream. `ChatApi` executes the device
+requests and POSTs their results to resume the same run. Both chat and overlay
+use this common path. The model receives success, failure, user-action-required,
+or unconfirmed results before replying.
 
-So this feature requires a **new path back to the AI**: tool result → next turn.
-Plan for it up front; retrofitting it later means reworking the streaming
-protocol. This is the single biggest architectural difference from the existing
-clock tools.
+Clock changes use `startVoiceActivity` and wait for completion/abort callbacks;
+missing callbacks never count as success. See `backend/README.md` for protocol,
+compatibility limits and verification. Future phone tools should reuse this
+result channel rather than the historical fire-and-forget example above.
 
 ---
 

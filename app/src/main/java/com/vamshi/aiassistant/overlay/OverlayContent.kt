@@ -47,7 +47,7 @@ import com.vamshi.aiassistant.ChatAudioRecorder
 import com.vamshi.aiassistant.ChatMessage
 import com.vamshi.aiassistant.ChatRecording
 import com.vamshi.aiassistant.ChatStreamEvent
-import com.vamshi.aiassistant.DeviceClockToolExecutor
+import com.vamshi.aiassistant.toolResultStatus
 import com.vamshi.aiassistant.RecordingEndReason
 import com.vamshi.aiassistant.RecordingEndRequest
 import com.vamshi.aiassistant.ToolExecutionStatus
@@ -306,7 +306,7 @@ fun OverlayContent(onClose: () -> Unit) {
                         isStreaming = true
                         streamJob = scope.launch {
                             try {
-                                ChatApi.streamAssistantResponse(text, conversationId).collect { event ->
+                                ChatApi.streamAssistantResponse(text, conversationId, context).collect { event ->
                                     when (event) {
                                         is ChatStreamEvent.ConversationReady -> {
                                             conversationId = event.conversationId
@@ -397,25 +397,12 @@ fun OverlayContent(onClose: () -> Unit) {
                                                             item.callId == event.callId
                                                         ) {
                                                             item.copy(
-                                                                status = ToolExecutionStatus.COMPLETED,
+                                                                status = toolResultStatus(event.outputPreview),
                                                                 outputPreview = event.outputPreview
                                                             )
                                                         } else item
                                                     }
                                                 )
-                                            }
-                                        }
-                                        is ChatStreamEvent.ClientToolRequested -> {
-                                            DeviceClockToolExecutor.execute(
-                                                context,
-                                                event.toolName,
-                                                event.argumentsJson
-                                            ).onFailure { error ->
-                                                Toast.makeText(
-                                                    context,
-                                                    error.message ?: "Clock action failed",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
                                             }
                                         }
                                         ChatStreamEvent.ResponseCompleted -> {
@@ -595,7 +582,13 @@ private fun OverlayToolRow(item: AssistantActivityItem.ToolExecution) {
                     strokeWidth = 2.dp
                 )
             } else {
-                Text("✓", color = ToolComplete, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    text = if (item.status == ToolExecutionStatus.COMPLETED) "\u2713"
+                        else if (item.status == ToolExecutionStatus.FAILED) "Failed" else "Unconfirmed",
+                    color = if (item.status == ToolExecutionStatus.COMPLETED) ToolComplete else CommentaryText,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
             }
             Text(
                 text = item.toolName.split('_').joinToString(" ") { word ->
