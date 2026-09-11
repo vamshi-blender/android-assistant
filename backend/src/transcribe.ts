@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import OpenAI, { APIError, toFile } from "openai";
+import { authenticateApiRequest } from "./auth.js";
 
 type AudioRequest = IncomingMessage & { body?: unknown };
 
-const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+// Leave headroom below Vercel's 4.5 MB function request-body limit.
+const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
+const AUDIO_TOO_LARGE_MESSAGE = "Audio file exceeds the 4 MB limit";
 const openai = new OpenAI();
 
 class AudioTooLargeError extends Error {}
@@ -82,6 +85,8 @@ export async function handleTranscription(
     return;
   }
 
+  if (!authenticateApiRequest(request, response)) return;
+
   const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim();
   if (contentType !== "audio/mp4" && contentType !== "audio/m4a") {
     sendJson(response, 415, { error: "Content-Type must be audio/mp4 or audio/m4a" });
@@ -90,7 +95,7 @@ export async function handleTranscription(
 
   const declaredLength = Number(request.headers["content-length"] ?? 0);
   if (declaredLength > MAX_AUDIO_BYTES) {
-    sendJson(response, 413, { error: "Audio file exceeds the 25 MB limit" });
+    sendJson(response, 413, { error: AUDIO_TOO_LARGE_MESSAGE });
     return;
   }
 
@@ -110,7 +115,7 @@ export async function handleTranscription(
     sendJson(response, 200, { text: transcription.text });
   } catch (error) {
     if (error instanceof AudioTooLargeError) {
-      sendJson(response, 413, { error: "Audio file exceeds the 25 MB limit" });
+      sendJson(response, 413, { error: AUDIO_TOO_LARGE_MESSAGE });
       return;
     }
 

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { authenticateApiRequest } from "./auth.js";
 import {
   streamAssistantResponse,
   type ChatStreamEvent,
@@ -29,6 +30,8 @@ export async function handleChat(
     response.end(JSON.stringify({ error: "Method not allowed" }));
     return;
   }
+
+  if (!authenticateApiRequest(request, response)) return;
 
   try {
     const body = (await readBody(request)) as {

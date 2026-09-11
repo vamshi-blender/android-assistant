@@ -194,7 +194,7 @@ fun ChatScreen(modifier: Modifier = Modifier) {
             isTranscribing = true
             scope.launch {
                 try {
-                    ChatApi.transcribeAudio(recording.file)
+                    ChatApi.transcribeAudio(context, recording.file)
                         .onSuccess { transcript -> draft = transcript }
                         .onFailure { error ->
                             Toast.makeText(

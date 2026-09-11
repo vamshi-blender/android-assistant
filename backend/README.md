@@ -35,11 +35,26 @@ curl -X POST http://localhost:3000/api/transcribe \
   --data-binary @recording.m4a
 ```
 
+Audio uploads are limited to 4 MB so they remain below Vercel Functions' 4.5 MB
+request-body limit. The Android client checks this before starting an upload,
+and the backend independently enforces the same limit.
+
 ## Vercel
 
 Create a Vercel project with this `backend` folder as its root directory, add
-`OPENAI_API_KEY` and optionally `OPENAI_MODEL`, then deploy. Update both backend
-URLs in the Android `ChatApi.kt` file to the resulting HTTPS endpoints.
+`OPENAI_API_KEY`, `TOOL_CONTINUATION_SECRET`, `APP_API_KEY`, and optionally
+`OPENAI_MODEL`, then deploy. The Android backend choices are defined in
+`BackendSettings.kt`.
+
+Both endpoints require `X-API-Key`. For Android builds, provide the matching
+`APP_API_KEY` through the environment or the ignored root `local.properties`:
+
+```properties
+APP_API_KEY=your-random-shared-key
+```
+
+This is intentionally lightweight protection for a hobby app. Since the key is
+included in the APK, it should not be treated as strong user authentication.
 
 
 ### Confirmed device Clock tools

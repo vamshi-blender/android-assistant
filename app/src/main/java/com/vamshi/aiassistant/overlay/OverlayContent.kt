@@ -274,7 +274,7 @@ fun OverlayContent(onClose: () -> Unit) {
                         error("No speech detected")
                     }
                     try {
-                        ChatApi.transcribeAudio(recording.file).getOrThrow()
+                        ChatApi.transcribeAudio(context, recording.file).getOrThrow()
                     } finally {
                         recording.file.delete()
                     }

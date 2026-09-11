@@ -17,12 +17,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -61,6 +64,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    var backendTarget by remember { mutableStateOf(BackendSettings.get(context)) }
+
+    fun selectBackend(target: BackendTarget) {
+        BackendSettings.set(context, target)
+        backendTarget = target
+    }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -86,9 +95,31 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(text = "AI Assistant")
+        Text(
+            text = "Backend",
+            style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BackendTarget.entries.forEach { target ->
+                if (target == backendTarget) {
+                    Button(onClick = { selectBackend(target) }) {
+                        Text("✓ ${target.displayName}")
+                    }
+                } else {
+                    OutlinedButton(onClick = { selectBackend(target) }) {
+                        Text(target.displayName)
+                    }
+                }
+            }
+        }
+        Text(
+            text = backendTarget.baseUrl,
+            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+        )
         Button(
             onClick = onOpenChat,
-            modifier = Modifier.padding(top = 24.dp)
+            modifier = Modifier.padding(top = 16.dp)
         ) {
             Text("Open Chat")
         }

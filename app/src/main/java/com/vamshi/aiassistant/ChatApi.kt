@@ -38,20 +38,28 @@ sealed interface ChatStreamEvent {
 enum class AssistantOutputPhase { COMMENTARY, FINAL_ANSWER }
 
 object ChatApi {
-    // Localhost is forwarded to the development machine with `adb reverse`.
-    // Replace this with the Vercel HTTPS URL for production.
-    private const val CHAT_URL = "http://localhost:3000/api/chat"
-    private const val TRANSCRIBE_URL = "http://localhost:3000/api/transcribe"
+    private const val MAX_AUDIO_BYTES = 4L * 1024 * 1024
 
-    suspend fun transcribeAudio(audioFile: File): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun transcribeAudio(context: Context, audioFile: File): Result<String> =
+        withContext(Dispatchers.IO) {
         runCatching {
-            val connection = (URL(TRANSCRIBE_URL).openConnection() as HttpURLConnection).apply {
+            check(BuildConfig.APP_API_KEY.isNotBlank()) {
+                "APP_API_KEY is not configured in this app build"
+            }
+            require(audioFile.length() <= MAX_AUDIO_BYTES) {
+                "Recording exceeds the 4 MB upload limit"
+            }
+            val connection = (
+                URL(BackendSettings.endpoint(context, "api/transcribe")).openConnection()
+                    as HttpURLConnection
+                ).apply {
                 requestMethod = "POST"
                 connectTimeout = 15_000
                 readTimeout = 60_000
                 doOutput = true
                 setRequestProperty("Content-Type", "audio/mp4")
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("X-API-Key", BuildConfig.APP_API_KEY)
                 setFixedLengthStreamingMode(audioFile.length())
             }
 
@@ -88,18 +96,25 @@ object ChatApi {
         withContext(Dispatchers.IO) {
             var connection: HttpURLConnection? = null
             try {
+                check(BuildConfig.APP_API_KEY.isNotBlank()) {
+                    "APP_API_KEY is not configured in this app build"
+                }
                 var continuation: String? = null
                 var toolResults: JSONObject? = null
                 do {
                     var pendingTools: JSONObject? = null
                     var responseCompleted = false
-                    connection = (URL(CHAT_URL).openConnection() as HttpURLConnection).apply {
+                    connection = (
+                        URL(BackendSettings.endpoint(context, "api/chat")).openConnection()
+                            as HttpURLConnection
+                        ).apply {
                         requestMethod = "POST"
                         connectTimeout = 15_000
                         readTimeout = 90_000
                         doOutput = true
                         setRequestProperty("Content-Type", "application/json")
                         setRequestProperty("Accept", "text/event-stream")
+                        setRequestProperty("X-API-Key", BuildConfig.APP_API_KEY)
                     }
 
                     val requestJson = JSONObject().put("message", userMessage).apply {

@@ -1,7 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.exists()) propertiesFile.inputStream().use(::load)
+}
+val appApiKey = providers.environmentVariable("APP_API_KEY").orNull
+    ?: localProperties.getProperty("APP_API_KEY").orEmpty()
+val escapedAppApiKey = appApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.vamshi.aiassistant"
@@ -17,6 +27,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "APP_API_KEY", "\"$escapedAppApiKey\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
