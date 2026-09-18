@@ -57,6 +57,7 @@ android {
 }
 
 dependencies {
+    implementation("io.github.webrtc-sdk:android:150.7871.01")
     // On-device wake-word / speech engine. Not published to Maven Central -
     // fetched from GitHub releases by scripts/fetch-wakeword-assets.sh.
     implementation(files("libs/sherpa-onnx-1.13.6.aar"))

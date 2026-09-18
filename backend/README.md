@@ -46,7 +46,7 @@ Create a Vercel project with this `backend` folder as its root directory, add
 `OPENAI_MODEL`, then deploy. The Android backend choices are defined in
 `BackendSettings.kt`.
 
-Both endpoints require `X-API-Key`. For Android builds, provide the matching
+All endpoints require `X-API-Key`. For Android builds, provide the matching
 `APP_API_KEY` through the environment or the ignored root `local.properties`:
 
 ```properties
@@ -55,6 +55,24 @@ APP_API_KEY=your-random-shared-key
 
 This is intentionally lightweight protection for a hobby app. Since the key is
 included in the APK, it should not be treated as strong user authentication.
+
+### Live voice
+
+The overlay's Live button starts a fresh conversational `gpt-live-1` session.
+`POST /api/live` accepts `{ "sdp": "<WebRTC offer>" }` and returns the Live
+session ID and SDP answer. It uses the same `APP_API_KEY` authentication and
+requires an `OPENAI_API_KEY` with GPT-Live access. This route runs locally and
+on Vercel; microphone and speaker audio travel directly between Android and
+OpenAI over WebRTC after setup. No tools or backend reasoning are configured.
+
+The app displays both speakers' live captions, supports microphone mute, and
+ends the session when you tap end or dismiss the overlay. Each Live call has
+its own conversation context, separate from regular text chat. Test on a device
+with microphone permission: start Live, speak, interrupt a reply, toggle mute,
+end, and start again. Confirm the microphone is released after dismissal and
+the wake-word listener resumes if it was running before the call.
+
+Protocol reference: [GPT-Live WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live).
 
 
 ### Confirmed device Clock tools

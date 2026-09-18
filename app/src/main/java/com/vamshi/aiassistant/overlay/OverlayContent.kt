@@ -47,6 +47,7 @@ import com.vamshi.aiassistant.ChatAudioRecorder
 import com.vamshi.aiassistant.ChatMessage
 import com.vamshi.aiassistant.ChatRecording
 import com.vamshi.aiassistant.ChatStreamEvent
+import com.vamshi.aiassistant.LiveSession
 import com.vamshi.aiassistant.toolResultStatus
 import com.vamshi.aiassistant.RecordingEndReason
 import com.vamshi.aiassistant.RecordingEndRequest
@@ -54,16 +55,20 @@ import com.vamshi.aiassistant.ToolExecutionStatus
 import com.vamshi.aiassistant.VoiceActivityConfig
 import com.vamshi.aiassistant.appendTextDelta
 import com.vamshi.aiassistant.overlay.composer.ComposerMode
+import com.vamshi.aiassistant.overlay.composer.LiveComposerBar
 import com.vamshi.aiassistant.overlay.composer.MessageComposer
 import com.vamshi.aiassistant.overlay.composer.OverlayStyle
 import com.vamshi.aiassistant.overlay.composer.rememberComposerState
 import com.vamshi.aiassistant.wakeword.WakeWordService
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.pow
 
 private const val SHOW_GRADIENT = false
@@ -93,10 +98,82 @@ fun OverlayContent(onClose: () -> Unit) {
     var streamJob by remember { mutableStateOf<Job?>(null) }
     var preparedRecording by remember { mutableStateOf<ChatRecording?>(null) }
     var resumeWakeWordAfterRecording by remember { mutableStateOf(false) }
+    var liveSessionActive by remember { mutableStateOf(false) }
+    var resumeWakeWordAfterLiveSession by remember { mutableStateOf(false) }
+    var liveMuted by remember { mutableStateOf(false) }
+    var awaitingLivePermission by remember { mutableStateOf(false) }
 
     fun updateAssistant(id: Long, update: (ChatMessage) -> ChatMessage) {
         val index = messages.indexOfFirst { it.id == id }
         if (index >= 0) messages[index] = update(messages[index])
+    }
+
+    var liveSession by remember { mutableStateOf<LiveSession?>(null) }
+    var liveStatus by remember { mutableStateOf("Connecting…") }
+
+    fun beginLiveSession() {
+        if (isStreaming || composer.mode != ComposerMode.EDITING || liveSession != null) return
+        if (!MicPermissionActivity.hasPermission(context)) {
+            awaitingLivePermission = true
+            MicPermissionActivity.request(context)
+            return
+        }
+        resumeWakeWordAfterLiveSession = WakeWordService.listening.value
+        if (resumeWakeWordAfterLiveSession) WakeWordService.stop(context)
+        liveMuted = false
+        liveSessionActive = true
+    }
+
+    LaunchedEffect(Unit) {
+        MicPermissionActivity.results.collect { granted ->
+            if (awaitingLivePermission) {
+                awaitingLivePermission = false
+                if (granted) beginLiveSession()
+            }
+        }
+    }
+
+    LaunchedEffect(liveSessionActive) {
+        if (!liveSessionActive) return@LaunchedEffect
+        val session = LiveSession(context.applicationContext)
+        liveSession = session
+        liveStatus = "Connecting…"
+        // Separate timestamp groups keep overlapping speakers in their own rows.
+        val captions = LiveCaptions()
+        val rowIds = mutableMapOf<Long, Long>()
+        try {
+            session.connect()
+            for (event in session.events) {
+                when (event) {
+                    LiveSession.Event.Connected -> liveStatus = "Listening"
+                    is LiveSession.Event.Transcript -> {
+                        val caption = captions.append(event.human, event.text, event.startMs, event.endMs)
+                        val messageId = rowIds.getOrPut(caption.id) {
+                            val id = nextId++
+                            messages += ChatMessage(id, "", isHuman = caption.human)
+                            id
+                        }
+                        updateAssistant(messageId) { it.copy(text = caption.text) }
+                    }
+                    is LiveSession.Event.Error -> error(event.message)
+                    LiveSession.Event.Ended -> break
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Toast.makeText(context, error.message ?: "Unable to start live voice", Toast.LENGTH_LONG).show()
+        } finally {
+            liveStatus = "Ending…"
+            withContext(NonCancellable) { session.close() }
+            liveSession = null
+            liveMuted = false
+            liveSessionActive = false
+            if (resumeWakeWordAfterLiveSession) {
+                resumeWakeWordAfterLiveSession = false
+                WakeWordService.start(context)
+            }
+        }
     }
 
     fun restoreWakeWordListener() {
@@ -256,15 +333,27 @@ fun OverlayContent(onClose: () -> Unit) {
                 }
             }
 
+            if (liveSessionActive || liveSession != null) {
+                LiveComposerBar(
+                    muted = liveMuted,
+                    status = if (liveMuted && liveStatus == "Listening") "Muted" else liveStatus,
+                    onMuteToggle = {
+                        liveMuted = !liveMuted
+                        liveSession?.setMuted(liveMuted)
+                    },
+                    onEnd = {
+                        liveSessionActive = false
+                    }
+                )
+                return@Column
+            }
+
             MessageComposer(
                 state = composer,
                 amplitudes = amplitudes,
                 onStartRecording = ::beginRecording,
                 onCancelRecording = ::cancelRecording,
-                onLiveSession = {
-                    // The button is retained for the original overlay layout;
-                    // live voice chat remains outside the current scope.
-                },
+                onLiveSession = ::beginLiveSession,
                 transcribe = {
                     val recording = preparedRecording ?: stopRecorder()
                     preparedRecording = null

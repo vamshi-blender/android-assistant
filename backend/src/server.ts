@@ -1,10 +1,15 @@
 import { createServer } from "node:http";
 import { handleChat } from "./http.js";
 import { handleTranscription } from "./transcribe.js";
+import { handleLive } from "./live.js";
 
 const port = Number(process.env.PORT ?? 3000);
 
 createServer(async (request, response) => {
+  if (request.url === "/api/live") {
+    await handleLive(request, response);
+    return;
+  }
   if (request.url === "/api/chat") {
     await handleChat(request, response);
     return;
