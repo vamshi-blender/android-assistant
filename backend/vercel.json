@@ -4,6 +4,9 @@
     "api/live.ts": {
       "maxDuration": 60
     },
+    "api/live-delegate.ts": {
+      "maxDuration": 60
+    },
     "api/chat.ts": {
       "maxDuration": 60
     },

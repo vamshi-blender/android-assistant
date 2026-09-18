@@ -118,6 +118,7 @@ object ChatApi {
                     }
 
                     val requestJson = JSONObject().put("message", userMessage).apply {
+                        put("model", AssistantModelSettings.get(context).wireName)
                         conversationId?.let { put("conversationId", it) }
                         put(
                             "deviceTime",

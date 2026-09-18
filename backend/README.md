@@ -2,7 +2,7 @@
 
 ## Local setup
 
-1. Copy `.env.example` to `.env` and set `OPENAI_API_KEY`.
+1. Copy `.env.example` to `.env` and set `OPENAI_API_KEY` and `GROQ_API_KEY`.
 2. Install packages with `npm install`.
 3. Start the server with `npm run dev`.
 
@@ -42,9 +42,15 @@ and the backend independently enforces the same limit.
 ## Vercel
 
 Create a Vercel project with this `backend` folder as its root directory, add
-`OPENAI_API_KEY`, `TOOL_CONTINUATION_SECRET`, `APP_API_KEY`, and optionally
+`OPENAI_API_KEY`, `GROQ_API_KEY`, `TOOL_CONTINUATION_SECRET`, `APP_API_KEY`, and optionally
 `OPENAI_MODEL`, then deploy. The Android backend choices are defined in
 `BackendSettings.kt`.
+
+The home screen's Agent model setting applies to both text chat and Live
+delegation. OpenAI uses the existing hosted Responses paths. Groq uses
+`openai/gpt-oss-20b` through the Agents SDK's OpenAI-compatible Chat Completions
+provider. Live
+voice still uses OpenAI `gpt-live-1`; only its delegated backend work uses Groq.
 
 All endpoints require `X-API-Key`. For Android builds, provide the matching
 `APP_API_KEY` through the environment or the ignored root `local.properties`:

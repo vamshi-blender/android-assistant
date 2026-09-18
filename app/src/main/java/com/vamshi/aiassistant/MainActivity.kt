@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -65,10 +67,16 @@ class MainActivity : ComponentActivity() {
 fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var backendTarget by remember { mutableStateOf(BackendSettings.get(context)) }
+    var assistantModel by remember { mutableStateOf(AssistantModelSettings.get(context)) }
 
     fun selectBackend(target: BackendTarget) {
         BackendSettings.set(context, target)
         backendTarget = target
+    }
+
+    fun selectModel(model: AssistantModel) {
+        AssistantModelSettings.set(context, model)
+        assistantModel = model
     }
 
     val overlayPermissionLauncher = rememberLauncherForActivityResult(
@@ -90,7 +98,7 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
     }
 
     Column(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -117,6 +125,24 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
             text = backendTarget.baseUrl,
             style = androidx.compose.material3.MaterialTheme.typography.bodySmall
         )
+        Text(
+            text = "Agent model",
+            style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 20.dp)
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistantModel.entries.forEach { model ->
+                if (model == assistantModel) {
+                    Button(onClick = { selectModel(model) }) {
+                        Text("\u2713 ${model.displayName}")
+                    }
+                } else {
+                    OutlinedButton(onClick = { selectModel(model) }) {
+                        Text(model.displayName)
+                    }
+                }
+            }
+        }
         Button(
             onClick = onOpenChat,
             modifier = Modifier.padding(top = 16.dp)

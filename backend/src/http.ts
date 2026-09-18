@@ -5,6 +5,7 @@ import {
   streamAssistantResponse,
   type ChatStreamEvent,
 } from "./chat.js";
+import { parseModelSelection } from "./models.js";
 
 type ChatRequest = IncomingMessage & { body?: unknown };
 
@@ -40,6 +41,7 @@ export async function handleChat(
       message?: unknown;
       conversationId?: unknown;
       deviceTime?: unknown;
+      model?: unknown;
     };
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const conversationId =
@@ -49,6 +51,7 @@ export async function handleChat(
       | undefined;
 
     const continuation = typeof body.continuation === "string" ? body.continuation : undefined;
+    const modelSelection = parseModelSelection(body.model);
     const toolResults = body.toolResults === undefined ? undefined : z.record(z.string(), z.object({
       status: z.enum(["succeeded", "failed", "unknown", "requires_user_action"]),
       message: z.string().max(2000),
@@ -91,6 +94,7 @@ export async function handleChat(
       },
       (event) => sendEvent(response, event),
       continuation,
+      modelSelection,
     );
     response.end();
   } catch (error) {

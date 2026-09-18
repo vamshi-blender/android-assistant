@@ -4,10 +4,17 @@ import {
   RunState,
   RunContext,
   type RunToolCallOutputItem,
+  type AgentInputItem,
 } from "@openai/agents";
 import OpenAI from "openai";
-import { sealContinuation, openContinuation } from "./continuation.js";
-import { assistantAgent, type DeviceContext } from "./agent.js";
+import {
+  sealContinuation,
+  openContinuation,
+  sealConversation,
+  openConversation,
+} from "./continuation.js";
+import { assistantAgent, groqAssistantAgent, type DeviceContext } from "./agent.js";
+import { createGroqRunner, type ModelSelection } from "./models.js";
 
 export type ChatStreamEvent =
   | { type: "conversation.ready"; conversationId: string }
@@ -94,16 +101,33 @@ export async function streamAssistantResponse(
   context: DeviceContext,
   emit: (event: ChatStreamEvent) => void,
   continuation?: string,
+  modelSelection: ModelSelection = "openai",
 ): Promise<void> {
   const saved = continuation ? openContinuation(continuation) : undefined;
-  const conversationId = saved?.conversationId ?? existingConversationId ?? (await openai.conversations.create()).id;
-  emit({ type: "conversation.ready", conversationId });
+  const selectedModel = saved?.model ?? modelSelection;
+  const activeAgent = selectedModel === "groq" ? groqAssistantAgent : assistantAgent;
+  if (saved?.model && saved.model !== modelSelection) {
+    throw new Error("The continuation model does not match the selected model");
+  }
+  if (selectedModel === "openai" && existingConversationId?.startsWith("groq.")) {
+    throw new Error("The selected model does not match this conversation");
+  }
+  const conversationId = selectedModel === "openai"
+    ? saved?.conversationId ?? existingConversationId ?? (await openai.conversations.create()).id
+    : saved?.conversationId ?? existingConversationId ?? "";
+  if (selectedModel === "openai") emit({ type: "conversation.ready", conversationId });
   const deviceContext: DeviceContext = { ...context };
-  let input: string | RunState<DeviceContext, typeof assistantAgent> =
-    `${currentKolkataTimeTag(context.deviceTime)}\n\n${userMessage}`;
+  const turnInput = `${currentKolkataTimeTag(context.deviceTime)}\n\n${userMessage}`;
+  let input: string | AgentInputItem[] | RunState<DeviceContext, typeof activeAgent> =
+    selectedModel === "groq"
+      ? [
+          ...(conversationId ? openConversation(conversationId).history : []),
+          { role: "user", content: turnInput },
+        ]
+      : turnInput;
   if (saved) {
     const state = await RunState.fromStringWithContext(
-      assistantAgent, saved.state, new RunContext(deviceContext), { contextStrategy: "replace" },
+      activeAgent, saved.state, new RunContext(deviceContext), { contextStrategy: "replace" },
     );
     const pending = state.getInterruptions();
     const expected = pending.map(item => item.rawItem.type === "function_call" ? item.rawItem.callId : "");
@@ -114,9 +138,16 @@ export async function streamAssistantResponse(
     for (const item of pending) state.approve(item);
     input = state;
   }
-  const stream = await run(assistantAgent, input, {
-    conversationId, context: deviceContext, stream: true,
-  });
+  const stream = selectedModel === "groq"
+    ? await createGroqRunner().run(groqAssistantAgent, input, {
+        context: deviceContext,
+        stream: true,
+      })
+    : await run(assistantAgent, input, {
+        conversationId,
+        context: deviceContext,
+        stream: true,
+      });
 
   let startsNewTextSegment = true;
   let fallbackSegmentNumber = 0;
@@ -209,8 +240,18 @@ export async function streamAssistantResponse(
       return { callId: item.rawItem.callId, name: action, arguments: arguments_ };
     });
     emit({ type: "client.tools.requested", requests,
-      continuation: sealContinuation({ conversationId, state: stream.state.toString() }) });
+      continuation: sealContinuation({
+        conversationId,
+        state: stream.state.toString(),
+        model: selectedModel,
+      }) });
     return;
+  }
+  if (selectedModel === "groq") {
+    emit({
+      type: "conversation.ready",
+      conversationId: sealConversation({ model: "groq", history: stream.history }),
+    });
   }
   emit({ type: "response.completed" });
 }
