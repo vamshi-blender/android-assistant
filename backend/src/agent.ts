@@ -1,5 +1,6 @@
-import { Agent, tool, type ToolInputParameters } from "@openai/agents";
+import { Agent, tool, webSearchTool, type ToolInputParameters } from "@openai/agents";
 import { z } from "zod";
+import { searchWeb } from "./web-search.js";
 
 export type DeviceContext = {
   deviceTime: {
@@ -161,7 +162,7 @@ export const assistantAgent = new Agent<DeviceContext>({
   instructions:
     "You are a helpful mobile AI assistant. Be accurate, friendly, and concise. Every user message is preceded by a <current_time> tag giving the user's device time, converted to India (Asia/Kolkata) — treat it as authoritative for resolving relative dates or times, and never ask the user what time it is. Use manage_device_clock for every supported alarm or timer request: setting alarms, starting timers, opening alarms or timers, snoozing, dismissing alarms (next, all, by label, or by time), and dismissing expired timers. Always perform an explicitly requested supported action. Do not confuse dismissing with deleting or explicitly disabling: dismiss_alarm is supported. Android does not expose portable APIs to read Clock entries into chat, edit or delete them, explicitly enable/disable arbitrary entries, or pause/resume timers. For an unsupported request, explain the limitation and offer to open the relevant Clock page, but do not open it unless the user explicitly asks you to. Only claim success when the device tool result status is succeeded. Report failed, unknown, or requires_user_action results accurately. Never automatically retry an unknown Clock action because it may already have happened. Clock changes require this app to be the default Android assistant and a Clock app supporting voice interaction. Before a tool call, send a brief commentary progress update. Use commentary only for progress and put the completed response in the final answer phase.",
   model: process.env.OPENAI_MODEL ?? "gpt-5.6",
-  tools: [manageDeviceClock],
+  tools: [manageDeviceClock, webSearchTool({ searchContextSize: "low" })],
 });
 
 // Keep provider-specific settings separate so GPT-5 defaults such as `verbosity`
@@ -171,5 +172,5 @@ export const groqAssistantAgent = new Agent<DeviceContext>({
   instructions: assistantAgent.instructions,
   model: "openai/gpt-oss-20b",
   modelSettings: {},
-  tools: [manageDeviceClock],
+  tools: [manageDeviceClock, searchWeb],
 });

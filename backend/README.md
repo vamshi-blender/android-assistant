@@ -51,6 +51,7 @@ delegation. OpenAI uses the existing hosted Responses paths. Groq uses
 `openai/gpt-oss-20b` through the Agents SDK's OpenAI-compatible Chat Completions
 provider. Live
 voice still uses OpenAI `gpt-live-1`; only its delegated backend work uses Groq.
+Both text chat and Live delegation can search the web for current information.
 
 All endpoints require `X-API-Key`. For Android builds, provide the matching
 `APP_API_KEY` through the environment or the ignored root `local.properties`:
@@ -69,7 +70,8 @@ The overlay's Live button starts a fresh conversational `gpt-live-1` session.
 session ID and SDP answer. It uses the same `APP_API_KEY` authentication and
 requires an `OPENAI_API_KEY` with GPT-Live access. This route runs locally and
 on Vercel; microphone and speaker audio travel directly between Android and
-OpenAI over WebRTC after setup. No tools or backend reasoning are configured.
+OpenAI over WebRTC after setup. Delegated backend work provides web search and
+the supported Android Clock actions.
 
 The app displays both speakers' live captions, supports microphone mute, and
 ends the session when you tap end or dismiss the overlay. Each Live call has

@@ -5,6 +5,7 @@ import { authenticateApiRequest } from "./auth.js";
 import { endLiveSession, manageDeviceClock, type DeviceContext } from "./agent.js";
 import { openContinuation, sealContinuation } from "./continuation.js";
 import { createGroqRunner, parseModelSelection } from "./models.js";
+import { searchWeb } from "./web-search.js";
 
 type LiveDelegateRequest = IncomingMessage & { body?: unknown };
 const MAX_BODY_BYTES = 128 * 1024;
@@ -16,12 +17,13 @@ const liveDelegateAgent = new Agent<DeviceContext>({
     "You are the backend reasoning and action component of one live voice assistant. Never mention delegation, providers, models, tools, or another agent.",
     "The input contains the live conversation transcript and an authoritative current device-time tag. Transcripts may contain mistakes or later corrections; use the latest context.",
     "Answer questions about the current time, date, or day from the supplied device time.",
+    "Use search_web for current information and whenever the user asks you to search, look up, or verify something online. Include useful source links in the result.",
     "Use manage_device_clock for every explicit supported alarm or timer request. Ask for a missing essential detail rather than guessing.",
     "Use end_session once when the user clearly asks to end, stop, close, or hang up the live conversation. Do not use it merely for 'stop talking'.",
     "Only report a device action as successful when its returned status is succeeded. Never retry an unknown action automatically.",
     "Return only a short, natural result for the voice assistant to say. After end_session returns, give one brief friendly goodbye.",
   ].join("\n\n"),
-  tools: [manageDeviceClock, endLiveSession],
+  tools: [manageDeviceClock, endLiveSession, searchWeb],
 });
 
 async function readBody(request: LiveDelegateRequest): Promise<unknown> {

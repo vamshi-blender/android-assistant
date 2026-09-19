@@ -156,12 +156,32 @@ export async function streamAssistantResponse(
     phase: "final_answer",
   };
   const segmentsByOutputIndex = new Map<number, AssistantTextSegment>();
+  const activeWebSearchCallIds = new Set<string>();
 
   for await (const event of stream) {
     if (isOpenAIResponsesRawModelStreamEvent(event)) {
       const modelEvent = event.data.event;
 
-      if (modelEvent.type === "response.created") {
+      if (modelEvent.type === "response.web_search_call.in_progress") {
+        if (!activeWebSearchCallIds.has(modelEvent.item_id)) {
+          activeWebSearchCallIds.add(modelEvent.item_id);
+          emit({
+            type: "tool.execution.started",
+            callId: modelEvent.item_id,
+            name: "web_search",
+            arguments: {},
+            startedAt: Date.now(),
+          });
+        }
+      } else if (modelEvent.type === "response.web_search_call.completed") {
+        activeWebSearchCallIds.delete(modelEvent.item_id);
+        emit({
+          type: "tool.execution.completed",
+          callId: modelEvent.item_id,
+          output: JSON.stringify({ status: "succeeded" }),
+          completedAt: Date.now(),
+        });
+      } else if (modelEvent.type === "response.created") {
         segmentsByOutputIndex.clear();
       } else if (
         modelEvent.type === "response.output_item.added" &&
@@ -182,6 +202,27 @@ export async function streamAssistantResponse(
 
     if (
       event.type === "run_item_stream_event" &&
+      event.name === "tool_called" &&
+      event.item.type === "tool_call_item" &&
+      event.item.rawItem.type === "function_call" &&
+      event.item.rawItem.name === "search_web"
+    ) {
+      const callId = event.item.rawItem.callId;
+      if (!activeWebSearchCallIds.has(callId)) {
+        activeWebSearchCallIds.add(callId);
+        emit({
+          type: "tool.execution.started",
+          callId,
+          name: "web_search",
+          arguments: parseArguments(event.item.rawItem.arguments),
+          startedAt: Date.now(),
+        });
+      }
+      continue;
+    }
+
+    if (
+      event.type === "run_item_stream_event" &&
       event.name === "message_output_created"
     ) {
       startsNewTextSegment = true;
@@ -194,7 +235,10 @@ export async function streamAssistantResponse(
       event.item.type === "tool_call_output_item"
     ) {
       if (event.item.callId) {
-        const output = toolOutputPreview(event.item);
+        const wasWebSearch = activeWebSearchCallIds.delete(event.item.callId);
+        const output = wasWebSearch
+          ? JSON.stringify({ status: "succeeded" })
+          : toolOutputPreview(event.item);
         emit({
           type: "tool.execution.completed",
           callId: event.item.callId,

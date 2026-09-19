@@ -33,9 +33,9 @@ test("Live endpoint authenticates and creates delegated Clock WebRTC sessions", 
       assert.equal(body.session.delegation.responses.model, "gpt-5.6-terra");
       assert.equal(body.session.delegation.responses.tool_choice, "auto");
       assert.equal(body.session.delegation.responses.parallel_tool_calls, false);
-      assert.deepEqual(body.session.delegation.responses.tools.map((tool: { name: string }) => tool.name), [
+      assert.deepEqual(body.session.delegation.responses.tools.map((tool: { name?: string; type: string }) => tool.name ?? tool.type), [
         "get_device_time", "set_alarm", "start_timer", "show_alarms", "show_timers", "snooze_alarm",
-        "dismiss_alarm", "dismiss_expired_timers", "end_session",
+        "dismiss_alarm", "dismiss_expired_timers", "end_session", "web_search",
       ]);
       assert.match(body.session.delegation.responses.instructions, /Asia\/Kolkata/);
       assert.match(body.session.delegation.responses.instructions, /Only report success/);
@@ -44,6 +44,7 @@ test("Live endpoint authenticates and creates delegated Clock WebRTC sessions", 
     }
     assert.match(body.session.instructions, /one assistant/);
     assert.match(body.session.instructions, /current time, date, or day/);
+    assert.match(body.session.instructions, /current information/);
     assert.match(body.session.instructions, /end, stop, close, or hang up/);
     assert.equal(body.session.tools, undefined);
     assert.deepEqual(body.transport, { type: "webrtc", sdp: "offer" });
