@@ -62,6 +62,9 @@ dependencies {
     // fetched from GitHub releases by scripts/fetch-wakeword-assets.sh.
     implementation(files("libs/sherpa-onnx-1.13.6.aar"))
 
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

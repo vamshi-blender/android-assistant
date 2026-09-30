@@ -47,13 +47,23 @@ class MainActivity : ComponentActivity() {
         setContent {
             AIAssistantTheme {
                 var showChat by rememberSaveable { mutableStateOf(false) }
-                BackHandler(enabled = showChat) { showChat = false }
+                var showMore by rememberSaveable { mutableStateOf(false) }
+                BackHandler(enabled = showChat || showMore) {
+                    showChat = false
+                    showMore = false
+                }
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     if (showChat) {
                         ChatScreen(modifier = Modifier.padding(innerPadding))
+                    } else if (showMore) {
+                        MoreScreen(
+                            onBack = { showMore = false },
+                            modifier = Modifier.padding(innerPadding)
+                        )
                     } else {
                         HomeScreen(
                             onOpenChat = { showChat = true },
+                            onOpenMore = { showMore = true },
                             modifier = Modifier.padding(innerPadding)
                         )
                     }
@@ -64,7 +74,11 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
+fun HomeScreen(
+    onOpenChat: () -> Unit,
+    onOpenMore: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     var backendTarget by remember { mutableStateOf(BackendSettings.get(context)) }
     var assistantModel by remember { mutableStateOf(AssistantModelSettings.get(context)) }
@@ -204,6 +218,12 @@ fun HomeScreen(onOpenChat: () -> Unit, modifier: Modifier = Modifier) {
             // Deliberately not naming the phrase - it is defined in
             // keywords.txt and the notification reports it from there.
             Text(if (listening) "Stop Listening" else "Start Listening")
+        }
+        Button(
+            onClick = onOpenMore,
+            modifier = Modifier.padding(top = 12.dp)
+        ) {
+            Text("More")
         }
     }
 }

@@ -391,6 +391,16 @@ class LiveSession(private val context: Context) {
                         .put("timeZoneId", now.zone.id)
                         .put("epochMillis", now.toInstant().toEpochMilli())
                 }
+                "manage_device_clock" -> {
+                    val wrappedArguments = JSONObject(arguments)
+                    val action = wrappedArguments.getString("action")
+                    wrappedArguments.remove("action")
+                    DeviceClockToolExecutor.execute(
+                        context,
+                        action,
+                        wrappedArguments.toString(),
+                    ).toJson()
+                }
                 "end_session" -> JSONObject()
                     .put("status", "ending")
                     .put("instruction", "Say one brief friendly goodbye now. The session will close immediately afterward.")

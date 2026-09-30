@@ -2,10 +2,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { Agent, RunContext, RunState } from "@openai/agents";
 import { z } from "zod";
 import { authenticateApiRequest } from "./auth.js";
-import { endLiveSession, manageDeviceClock, type DeviceContext } from "./agent.js";
 import { openContinuation, sealContinuation } from "./continuation.js";
 import { createGroqRunner, parseModelSelection } from "./models.js";
-import { searchWeb } from "./web-search.js";
+import { groqLiveTools, type DeviceContext } from "./tool-registry.js";
 
 type LiveDelegateRequest = IncomingMessage & { body?: unknown };
 const MAX_BODY_BYTES = 128 * 1024;
@@ -23,7 +22,7 @@ const liveDelegateAgent = new Agent<DeviceContext>({
     "Only report a device action as successful when its returned status is succeeded. Never retry an unknown action automatically.",
     "Return only a short, natural result for the voice assistant to say. After end_session returns, give one brief friendly goodbye.",
   ].join("\n\n"),
-  tools: [manageDeviceClock, endLiveSession, searchWeb],
+  tools: groqLiveTools,
 });
 
 async function readBody(request: LiveDelegateRequest): Promise<unknown> {

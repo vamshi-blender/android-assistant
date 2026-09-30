@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { authenticateApiRequest } from "./auth.js";
 import { parseModelSelection } from "./models.js";
+import { openAiLiveTools } from "./tool-registry.js";
 
 type LiveRequest = IncomingMessage & { body?: unknown };
 const MAX_BODY_BYTES = 64 * 1024;
@@ -15,111 +16,6 @@ const liveGreeting = {
   ].join(" "),
   begin: "Begin the conversation now, following the greeting instructions provided.",
 };
-
-const clockTools = [
-  {
-    type: "function",
-    name: "get_device_time",
-    description: "Get the phone's current local date, time, day of week, and time zone.",
-    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "set_alarm",
-    description: "Set an alarm in the Android Clock app using the device's local time.",
-    parameters: {
-      type: "object",
-      properties: {
-        hour: { type: "integer", minimum: 0, maximum: 23, description: "Hour in 24-hour device-local time." },
-        minute: { type: "integer", minimum: 0, maximum: 59 },
-        label: { type: ["string", "null"], maxLength: 200 },
-        repeatDays: {
-          type: ["array", "null"],
-          items: { type: "string", enum: ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] },
-          description: "Null for a one-time alarm.",
-        },
-        vibrate: { type: ["boolean", "null"] },
-        silent: { type: ["boolean", "null"] },
-      },
-      required: ["hour", "minute", "label", "repeatDays", "vibrate", "silent"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "start_timer",
-    description: "Start a countdown timer in the Android Clock app.",
-    parameters: {
-      type: "object",
-      properties: {
-        durationSeconds: { type: "integer", minimum: 1, maximum: 86_400 },
-        label: { type: ["string", "null"], maxLength: 200 },
-      },
-      required: ["durationSeconds", "label"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "show_alarms",
-    description: "Open the alarms page in the Android Clock app.",
-    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "show_timers",
-    description: "Open the timers page in the Android Clock app.",
-    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "snooze_alarm",
-    description: "Snooze the currently ringing Android alarm.",
-    parameters: {
-      type: "object",
-      properties: { durationMinutes: { type: ["integer", "null"], minimum: 1, maximum: 60 } },
-      required: ["durationMinutes"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "dismiss_alarm",
-    description: "Dismiss Android alarms by next alarm, all alarms, label, or local time. This does not delete or disable them.",
-    parameters: {
-      type: "object",
-      properties: {
-        mode: { type: "string", enum: ["next", "all", "label", "time"] },
-        label: { type: ["string", "null"], maxLength: 200 },
-        hour: { type: ["integer", "null"], minimum: 0, maximum: 23 },
-        minute: { type: ["integer", "null"], minimum: 0, maximum: 59 },
-      },
-      required: ["mode", "label", "hour", "minute"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "dismiss_expired_timers",
-    description: "Dismiss all expired timers in the Android Clock app.",
-    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-    strict: true,
-  },
-  {
-    type: "function",
-    name: "end_session",
-    description: "End the live voice session after a brief spoken goodbye. Use only when the user clearly asks to end, stop, close, or hang up the session.",
-    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-    strict: true,
-  },
-] as const;
 
 function parseDeviceTime(body: unknown): DeviceTime | undefined {
   const value = (body as { deviceTime?: unknown } | null)?.deviceTime as
@@ -263,7 +159,7 @@ export async function handleLive(request: LiveRequest, response: ServerResponse)
                 responses: {
                   model: process.env.OPENAI_LIVE_BACKEND_MODEL ?? "gpt-5.6-terra",
                   instructions: backendInstructions(deviceTime),
-                  tools: [...clockTools, { type: "web_search" }],
+                  tools: openAiLiveTools,
                   tool_choice: "auto",
                   parallel_tool_calls: false,
                 },

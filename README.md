@@ -298,6 +298,7 @@ your voice hits, since logcat names the match.
 | [`ChatScreen.kt`](app/src/main/java/com/vamshi/aiassistant/ChatScreen.kt) | Chat UI — streams commentary and the final answer separately |
 | [`ChatApi.kt`](app/src/main/java/com/vamshi/aiassistant/ChatApi.kt) | Chat SSE and audio-transcription client |
 | [`DeviceClockToolExecutor.kt`](app/src/main/java/com/vamshi/aiassistant/DeviceClockToolExecutor.kt) | Runs client-side clock tools via `AlarmClock` intents |
+| [`backend/src/tool-registry.ts`](backend/src/tool-registry.ts) | Shared tool definitions and the tool sets exposed to chat and live agents |
 | [`assist/`](app/src/main/java/com/vamshi/aiassistant/assist/) | `VoiceInteractionService` trio that makes the app the default assistant |
 | [`overlay/AssistantTrigger.kt`](app/src/main/java/com/vamshi/aiassistant/overlay/AssistantTrigger.kt) | Single entry point; routes on lock state |
 | [`overlay/OverlayService.kt`](app/src/main/java/com/vamshi/aiassistant/overlay/OverlayService.kt) | Overlay window when unlocked |

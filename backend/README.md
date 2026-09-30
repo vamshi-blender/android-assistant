@@ -85,6 +85,12 @@ Protocol reference: [GPT-Live WebRTC](https://developers.openai.com/api/docs/gui
 
 ### Confirmed device Clock tools
 
+Tool schemas and agent-specific availability are centralized in
+`src/tool-registry.ts`. Chat and live voice both see one
+`manage_device_clock` tool containing the supported Clock actions. Live voice
+additionally receives `get_device_time` and `end_session`; those tools are not
+exposed to text chat.
+
 Clock tools pause using Agents SDK `interruptions` and serialized `RunState`.
 The SSE response ends with `client.tools.requested` (call IDs, actions, arguments,
 and an encrypted continuation). Android executes each action, then POSTs the
