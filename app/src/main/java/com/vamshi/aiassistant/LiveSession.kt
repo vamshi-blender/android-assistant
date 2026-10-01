@@ -309,7 +309,7 @@ class LiveSession(private val context: Context) {
                                     "End the session after one brief friendly goodbye.",
                                 )
                             } else {
-                                DeviceClockToolExecutor.execute(
+                                DeviceTools.execute(
                                     context,
                                     name,
                                     request.getJSONObject("arguments").toString(),
@@ -404,7 +404,8 @@ class LiveSession(private val context: Context) {
                 "end_session" -> JSONObject()
                     .put("status", "ending")
                     .put("instruction", "Say one brief friendly goodbye now. The session will close immediately afterward.")
-                else -> DeviceClockToolExecutor.execute(context, name, arguments).toJson()
+                // get_device_status, set_device_setting and switch_wifi_network
+                else -> DeviceTools.execute(context, name, arguments).toJson()
             }
             if (stopping || disposed) return@launch
             val resultSent = sendCommand(JSONObject()

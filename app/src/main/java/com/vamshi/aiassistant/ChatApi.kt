@@ -208,7 +208,7 @@ object ChatApi {
                         val requests = pending.getJSONArray("requests")
                         for (index in 0 until requests.length()) {
                             val request = requests.getJSONObject(index)
-                            val result = DeviceClockToolExecutor.execute(
+                            val result = DeviceTools.execute(
                                 context.applicationContext, request.getString("name"),
                                 request.getJSONObject("arguments").toString()
                             )

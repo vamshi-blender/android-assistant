@@ -34,7 +34,8 @@ test("Live endpoint authenticates and creates delegated Clock WebRTC sessions", 
       assert.equal(body.session.delegation.responses.tool_choice, "auto");
       assert.equal(body.session.delegation.responses.parallel_tool_calls, false);
       assert.deepEqual(body.session.delegation.responses.tools.map((tool: { name?: string; type: string }) => tool.name ?? tool.type), [
-        "manage_device_clock", "get_device_time", "end_session", "web_search",
+        "manage_device_clock", "get_device_time", "get_device_status", "set_device_setting",
+        "switch_wifi_network", "end_session", "web_search",
       ]);
       assert.deepEqual(
         body.session.delegation.responses.tools[0].parameters.properties.action.enum,

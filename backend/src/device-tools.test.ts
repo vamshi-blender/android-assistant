@@ -59,3 +59,69 @@ for (const status of ["succeeded", "failed", "unknown", "requires_user_action"] 
     assert.equal(resumed.at(-1).type, "response.completed");
   });
 }
+
+for (const [toolName, args] of [
+  ["get_device_status", { includeWifiNetworks: true }],
+  ["set_device_setting", { setting: "bluetooth", enabled: true }],
+  ["switch_wifi_network", { ssid: "Home" }],
+] as const) {
+  test(`${toolName} pauses for the phone and resumes with its result`, async () => {
+    let modelCalls = 0;
+    const model: Model = {
+      async getResponse() { throw new Error("Only streaming expected"); },
+      async *getStreamedResponse() {
+        modelCalls++;
+        yield { type: "response_done", response: {
+          id: `resp_${modelCalls}`, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          output: modelCalls === 1
+            ? [{ type: "function_call", id: "fc_1", callId: "call_1", name: toolName, arguments: JSON.stringify(args) }]
+            : [{ type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done." }] }],
+        } };
+      },
+    };
+    assistantAgent.model = model;
+    const events: any[] = [];
+    await streamAssistantResponse("Check my phone", "conv_test", context, e => events.push(e));
+    const started = events.find(e => e.type === "tool.execution.started");
+    assert.equal(started.name, toolName);
+    assert.deepEqual(started.arguments, args);
+    const pending = events.find(e => e.type === "client.tools.requested");
+    // Settings tools go to the phone under their own name, with untouched arguments.
+    assert.deepEqual(pending.requests, [{ callId: "call_1", name: toolName, arguments: args }]);
+
+    const resumed: any[] = [];
+    await streamAssistantResponse("", undefined, {
+      ...context, toolResults: { call_1: { status: "succeeded", message: "{\"ok\":true}" } },
+    }, e => resumed.push(e), pending.continuation);
+    assert.equal(modelCalls, 2);
+    assert.equal(JSON.parse(resumed.find(e => e.type === "tool.execution.completed").output).status, "succeeded");
+    assert.equal(resumed.at(-1).type, "response.completed");
+  });
+}
+
+test("every agent tool list exposes the phone-settings tools", async () => {
+  const registry = await import("./tool-registry.js");
+  const names = (tools: readonly any[]) => tools.map(t => t.name ?? t.type);
+  for (const list of [registry.openAiChatTools, registry.groqChatTools, registry.groqLiveTools, registry.openAiLiveTools]) {
+    for (const name of ["get_device_status", "set_device_setting", "switch_wifi_network"]) {
+      assert.ok(names(list).includes(name), `${name} missing from a tool list`);
+    }
+  }
+  assert.deepEqual(registry.toDeviceRequest("manage_device_clock", { action: "set_alarm", hour: 7 }),
+    { name: "set_alarm", arguments: { hour: 7 } });
+  assert.equal(registry.toDeviceRequest("search_web", {}), undefined);
+});
+
+test("Groq tools avoid strict schemas with an empty required list", async () => {
+  // Groq answers 400 "'required' present but 'properties' is missing" for these,
+  // which broke every Groq live delegation.
+  const registry = await import("./tool-registry.js");
+  for (const list of [registry.groqChatTools, registry.groqLiveTools]) {
+    for (const tool of list as any[]) {
+      const schema = tool.parameters;
+      if (!schema || typeof schema !== "object") continue;
+      const emptyRequired = Array.isArray(schema.required) && schema.required.length === 0;
+      assert.ok(!(tool.strict && emptyRequired), `${tool.name} is strict with an empty required list`);
+    }
+  }
+});

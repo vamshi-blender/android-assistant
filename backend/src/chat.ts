@@ -15,6 +15,7 @@ import {
 } from "./continuation.js";
 import { assistantAgent, groqAssistantAgent, type DeviceContext } from "./agent.js";
 import { createGroqRunner, type ModelSelection } from "./models.js";
+import { toDeviceRequest } from "./tool-registry.js";
 
 export type ChatStreamEvent =
   | { type: "conversation.ready"; conversationId: string }
@@ -274,14 +275,15 @@ export async function streamAssistantResponse(
   await stream.completed;
   if (stream.interruptions.length) {
     const requests = stream.interruptions.map(item => {
-      if (item.rawItem.type !== "function_call" || item.rawItem.name !== "manage_device_clock") {
+      if (item.rawItem.type !== "function_call") {
         throw new Error("Unsupported device tool interruption");
       }
-      const { action, ...arguments_ } = parseArguments(item.rawItem.arguments);
-      if (typeof action !== "string") throw new Error("Missing Clock action");
+      const args = parseArguments(item.rawItem.arguments);
+      const request = toDeviceRequest(item.rawItem.name, args);
+      if (!request) throw new Error("Unsupported device tool interruption");
       emit({ type: "tool.execution.started", callId: item.rawItem.callId,
-        name: item.rawItem.name, arguments: { action, ...arguments_ }, startedAt: Date.now() });
-      return { callId: item.rawItem.callId, name: action, arguments: arguments_ };
+        name: item.rawItem.name, arguments: args, startedAt: Date.now() });
+      return { callId: item.rawItem.callId, ...request };
     });
     emit({ type: "client.tools.requested", requests,
       continuation: sealContinuation({

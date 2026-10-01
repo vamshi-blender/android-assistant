@@ -70,6 +70,65 @@ const clockActionParameters = {
   additionalProperties: true,
 } satisfies ToolInputParameters;
 
+export const deviceSettings = [
+  "wifi",
+  "mobile_data",
+  "bluetooth",
+  "airplane_mode",
+  "brightness",
+] as const;
+
+const deviceStatusParameters = {
+  type: "object",
+  properties: {
+    includeWifiNetworks: {
+      type: "boolean",
+      description:
+        "Also scan and list the Wi-Fi networks in range, marking which are saved. Slower (about 3 seconds); only set when the user asks about nearby or available Wi-Fi networks.",
+    },
+  },
+  required: [],
+  additionalProperties: true,
+} satisfies ToolInputParameters;
+
+const deviceSettingParameters = {
+  type: "object",
+  properties: {
+    setting: {
+      type: "string",
+      enum: [...deviceSettings],
+      description: "Which phone setting to change",
+    },
+    enabled: {
+      type: "boolean",
+      description:
+        "Required for wifi, mobile_data, bluetooth, and airplane_mode: true turns it on, false turns it off. Always an explicit target state, never a toggle.",
+    },
+    level: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "Required for brightness: the screen brightness as a percentage",
+    },
+  },
+  required: ["setting"],
+  additionalProperties: true,
+} satisfies ToolInputParameters;
+
+const switchWifiParameters = {
+  type: "object",
+  properties: {
+    ssid: {
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+      description: "The exact name of a saved Wi-Fi network that is currently in range",
+    },
+  },
+  required: ["ssid"],
+  additionalProperties: true,
+} satisfies ToolInputParameters;
+
 const emptyParameters = {
   type: "object",
   properties: {},
@@ -90,6 +149,27 @@ const toolDefinitions = {
     description: "Get the phone's current local date, time, day of week, and time zone.",
     parameters: emptyParameters,
     strict: true,
+  },
+  getDeviceStatus: {
+    name: "get_device_status",
+    description:
+      "Read the phone's current Wi-Fi (on/off and connected network), mobile data, Bluetooth, airplane mode, and screen brightness status. Set includeWifiNetworks to also list the Wi-Fi networks in range. Use this to answer questions about these settings and before changing one when the current state matters.",
+    parameters: deviceStatusParameters,
+    strict: false,
+  },
+  setDeviceSetting: {
+    name: "set_device_setting",
+    description:
+      "Change one phone setting. For wifi, mobile_data, bluetooth, and airplane_mode pass enabled (true = on, false = off). For brightness pass level (0-100 percent); this also turns off auto-brightness. Turning off the connection the assistant is using (Wi-Fi, mobile data, or turning on airplane mode) can end this conversation's connection, so it is applied a few seconds after the result is returned; tell the user it is happening now. Does nothing if the setting is already in the requested state.",
+    parameters: deviceSettingParameters,
+    strict: false,
+  },
+  switchWifiNetwork: {
+    name: "switch_wifi_network",
+    description:
+      "Switch the phone to a different saved Wi-Fi network that is currently in range, by its exact name (ssid). Networks that are not already saved on the phone cannot be joined this way; the user must connect to those in Android's Wi-Fi settings because they need a password. Wi-Fi must be on. The connection drops briefly while switching.",
+    parameters: switchWifiParameters,
+    strict: false,
   },
   endSession: {
     name: "end_session",
@@ -137,8 +217,65 @@ export const manageDeviceClock = tool<typeof clockActionParameters, DeviceContex
   },
 });
 
-export const endLiveSession = tool<typeof emptyParameters, DeviceContext>({
+export const getDeviceStatus = tool<typeof deviceStatusParameters, DeviceContext>({
+  ...toolDefinitions.getDeviceStatus,
+  needsApproval: true,
+  execute: (_input: unknown, runContext, details) => deviceResult(runContext, details),
+});
+
+export const setDeviceSetting = tool<typeof deviceSettingParameters, DeviceContext>({
+  ...toolDefinitions.setDeviceSetting,
+  needsApproval: true,
+  execute: (_input: unknown, runContext, details) => deviceResult(runContext, details),
+});
+
+export const switchWifiNetwork = tool<typeof switchWifiParameters, DeviceContext>({
+  ...toolDefinitions.switchWifiNetwork,
+  needsApproval: true,
+  execute: (_input: unknown, runContext, details) => deviceResult(runContext, details),
+});
+
+/** Tools the phone runs itself, besides manage_device_clock. */
+const phoneSettingsToolNames: readonly string[] = [
+  toolDefinitions.getDeviceStatus.name,
+  toolDefinitions.setDeviceSetting.name,
+  toolDefinitions.switchWifiNetwork.name,
+];
+
+export type DeviceToolRequest = { name: string; arguments: Record<string, unknown> };
+
+/**
+ * Maps a paused model tool call to the request sent to the phone. The Clock
+ * tool fans out into its `action`; the phone-settings tools go by their own
+ * name. Returns undefined for tools the phone does not run.
+ */
+export function toDeviceRequest(
+  toolName: string,
+  args: Record<string, unknown>,
+): DeviceToolRequest | undefined {
+  if (toolName === toolDefinitions.manageDeviceClock.name) {
+    const { action, ...rest } = args;
+    if (typeof action !== "string") throw new Error("Missing Clock action");
+    return { name: action, arguments: rest };
+  }
+  if (phoneSettingsToolNames.includes(toolName)) return { name: toolName, arguments: args };
+  return undefined;
+}
+
+// Only Groq uses this tool (OpenAI live gets the strict definition above). Groq
+// rejects a strict function whose `required` list is empty, so it is sent
+// non-strict instead.
+const groqEndSessionParameters = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: true,
+} satisfies ToolInputParameters;
+
+export const endLiveSession = tool<typeof groqEndSessionParameters, DeviceContext>({
   ...toolDefinitions.endSession,
+  parameters: groqEndSessionParameters,
+  strict: false,
   needsApproval: true,
   execute: (_input, runContext, details) => deviceResult(runContext, details),
 });
@@ -156,16 +293,35 @@ function liveFunction<T extends {
 // remain single-source, while agent-only tools stay out of unrelated contexts.
 export const openAiChatTools = [
   manageDeviceClock,
+  getDeviceStatus,
+  setDeviceSetting,
+  switchWifiNetwork,
   webSearchTool({ searchContextSize: "low" }),
 ];
 
-export const groqChatTools = [manageDeviceClock, searchWeb];
+export const groqChatTools = [
+  manageDeviceClock,
+  getDeviceStatus,
+  setDeviceSetting,
+  switchWifiNetwork,
+  searchWeb,
+];
 
-export const groqLiveTools = [manageDeviceClock, endLiveSession, searchWeb];
+export const groqLiveTools = [
+  manageDeviceClock,
+  getDeviceStatus,
+  setDeviceSetting,
+  switchWifiNetwork,
+  endLiveSession,
+  searchWeb,
+];
 
 export const openAiLiveTools = [
   liveFunction(toolDefinitions.manageDeviceClock),
   liveFunction(toolDefinitions.getDeviceTime),
+  liveFunction(toolDefinitions.getDeviceStatus),
+  liveFunction(toolDefinitions.setDeviceSetting),
+  liveFunction(toolDefinitions.switchWifiNetwork),
   liveFunction(toolDefinitions.endSession),
   { type: "web_search" as const },
 ];

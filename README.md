@@ -43,7 +43,10 @@ with the smoothed audio level without changing its layout or touch target.
                                       ┌──────── backend (Node + Vercel) ────────┐
                                       │  /api/chat → @openai/agents             │
                                       │  tools: get_device_time,                │
-                                      │         manage_device_clock             │
+                                      │         manage_device_clock,            │
+                                      │         get_device_status,              │
+                                      │         set_device_setting,             │
+                                      │         switch_wifi_network             │
                                       └─────────────────────────────────────────┘
 ```
 
@@ -53,6 +56,11 @@ returned to the app as a **client tool** and executed locally by
 [`DeviceClockToolExecutor`](app/src/main/java/com/vamshi/aiassistant/DeviceClockToolExecutor.kt),
 which fires `AlarmClock` intents (`set_alarm`, `start_timer`, `snooze_alarm`,
 `dismiss_alarm`, `show_alarms`, `show_timers`, `dismiss_expired_timers`).
+`get_device_status`, `set_device_setting` and `switch_wifi_network` are client
+tools too, run by
+[`DeviceSettingsToolExecutor`](app/src/main/java/com/vamshi/aiassistant/DeviceSettingsToolExecutor.kt)
+to read or change Wi-Fi, mobile data, Bluetooth, airplane mode and brightness,
+and to switch between saved Wi-Fi networks.
 
 ---
 
@@ -115,6 +123,125 @@ HTTPS deployment URLs when deploying.
 | **Show Overlay** | "Display over other apps" |
 | **Start Listening** | Microphone + notifications |
 | **Set as Default Assistant** | Opens the system assistant picker — needed for the power-button trigger |
+| **More → Grant permission** | "Modify system settings" — needed for the brightness slider |
+| **More → any Wi-Fi / mobile data / airplane switch** | The Shizuku access prompt — see [Phone controls and Shizuku](#phone-controls-and-shizuku) |
+
+---
+
+## Phone controls and Shizuku
+
+The **More** button on the home screen opens a page that shows and changes the
+phone's connectivity and brightness. The same controls are available to the AI
+as tools (`get_device_status`, `set_device_setting`, `switch_wifi_network` — see
+[`backend/README.md`](backend/README.md#phone-settings-tools)).
+
+| Control | How it works | Needs Shizuku |
+| --- | --- | --- |
+| Wi-Fi on/off | `svc wifi enable\|disable` | Yes |
+| Mobile data on/off | `svc data enable\|disable` | Yes |
+| Airplane mode on/off | `cmd connectivity airplane-mode enable\|disable` | Yes |
+| Wi-Fi network list and switching | `cmd wifi` scan, then a helper that asks the Wi-Fi service to join a *saved* network by id (no password needed) | Yes |
+| Bluetooth on/off | The app switches it itself with `BLUETOOTH_ADMIN` on Android 11 and older | No (Android 11 or older) |
+| Brightness slider | Writes the system brightness; needs the "Modify system settings" permission | No |
+| Reading the current state | Public settings and `WifiManager` | No |
+
+### Why Shizuku
+
+Android does not let ordinary apps flip these radios: `WifiManager.setWifiEnabled`
+does nothing for apps targeting Android 10+, apps cannot change mobile data or
+airplane mode at all, and Android 13+ blocks Bluetooth toggling. The `adb shell`
+user *can* do all of it. [Shizuku](https://shizuku.rikka.app/) is a free,
+open-source app that starts a small service with that shell-level privilege and
+lets apps you approve send it commands — no root needed.
+
+Shizuku is optional. Without it the app still runs; the Wi-Fi, mobile data and
+airplane switches fall back to opening the matching Android settings screen, and
+the AI tools return `requires_user_action` asking you to start Shizuku.
+
+### Set up Shizuku
+
+1. **Install Shizuku** on the phone from the
+   [Play Store](https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api)
+   or the [GitHub releases](https://github.com/RikkaApps/Shizuku/releases)
+   (the app was tested with 13.5).
+2. **Enable Developer options and USB debugging** (Settings → About phone → tap
+   *Build number* seven times, then Settings → Developer options → *USB debugging*).
+3. **Start the Shizuku service.** Pick one:
+   - **From a computer (USB):** open the Shizuku app once, then run
+     ```bash
+     P=$(adb shell pm path moe.shizuku.privileged.api | tr -d '\r' | sed 's/package://; s#/base.apk##')
+     adb shell "$P/lib/arm64/libshizuku.so"      # use lib/arm/ on a 32-bit phone
+     ```
+     (In Git Bash on Windows, `export MSYS_NO_PATHCONV=1` first so paths are not
+     rewritten.) Shizuku's own *Start via connected computer* screen shows an
+     equivalent `start.sh` command.
+   - **On the phone only (Android 11+):** in the Shizuku app choose *Start via
+     Wireless debugging*, turn on Wireless debugging in Developer options, pair
+     when prompted, then tap *Start*.
+4. **Check it is running.** The Shizuku app says *Shizuku is running*; from a
+   computer, `adb shell ps -A | grep shizuku_server` shows the process.
+5. **Approve this app.** Open **More** and tap any Wi-Fi, mobile data or
+   airplane switch. Shizuku asks *Allow AI Assistant to access Shizuku?* — choose
+   **Allow all the time**. After that the switches change the setting directly.
+
+**Shizuku stops whenever the phone reboots.** Start it again (step 3) after each
+restart. Approval of the app is remembered.
+
+#### Realme / Oppo (ColorOS) and other restricted ROMs
+
+Some manufacturers strip permissions from the `adb` user. The symptom is a
+*"The permission of adb is limited"* dialog when you tap a switch, and a red
+*"You need to take an extra step"* card in the Shizuku app. On Realme/Oppo
+(ColorOS) turn on **Settings → Developer options → Disable permission
+monitoring**, then restart Shizuku (step 3). Other makers have similar switches
+(for example Xiaomi's *USB debugging (Security settings)*); the red card's
+*Read help* button opens Shizuku's guide for your phone.
+
+> **Security note.** An app you approve in Shizuku can run shell-level commands,
+> and *Disable permission monitoring* turns off a manufacturer safeguard. Only
+> approve apps you trust. You can revoke access in the Shizuku app under
+> *Authorized applications*, and turn the developer option off again when you are
+> done.
+
+### Bluetooth
+
+Bluetooth is deliberately **not** done through Shizuku: ColorOS denies the shell
+user `BLUETOOTH_ADMIN`, so the shell commands fail. On Android 11 and older the
+app calls `BluetoothAdapter` directly. On Android 12+ it falls back to opening
+the Bluetooth settings screen, and Android 13+ does not allow apps to toggle
+Bluetooth at all.
+
+### Wi-Fi switching
+
+The list shows every network in range, marked *Connected*, *Saved*, *Secured* or
+*Open*. Tapping a **saved** network switches to it. Tapping any other network
+opens Android's Wi-Fi panel, where Android shows its own password popup — a
+specific network cannot be deep-linked on Android 11. Under the hood, switching
+runs [`WifiSwitchMain`](app/src/main/java/com/vamshi/aiassistant/WifiSwitchMain.kt)
+as the shell user through `app_process`; it asks the Wi-Fi service to enable the
+saved network by id. WEP and enterprise (EAP) networks are not listed as
+joinable.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Switches open a settings screen instead of toggling | Shizuku is not running or the app is not approved. Start Shizuku (step 3) and approve the prompt. |
+| *"The permission of adb is limited"* | ColorOS/OEM restriction — see the Realme/Oppo section above, then restart Shizuku. |
+| Wi-Fi list shows *"Allow Shizuku access…"* | Same as above; tap the Wi-Fi switch to trigger the approval prompt. |
+| Bluetooth switch opens settings | Android 12 or newer, or the ROM blocks it. Use the settings screen. |
+| Brightness shows *Grant permission* | Grant "Modify system settings" for the app, then return to the page. |
+| Wi-Fi switch fails with *Could not connect* | The saved password is out of date or the signal is weak — reconnect once from Android's Wi-Fi settings. |
+| `adb` says *more than one device* | The phone appears over USB and wireless debugging. Use `adb -s <serial>` or set `ANDROID_SERIAL`. |
+| Everything stopped working after a reboot | Shizuku does not survive a reboot — start it again. |
+
+### Release builds
+
+Debug builds are not minified. If you turn on R8/ProGuard, keep
+`com.vamshi.aiassistant.WifiSwitchMain` (it is started by class name through
+`app_process`) and the Shizuku API classes
+(`rikka.shizuku.**`) — `ShizukuRadios` reaches `Shizuku.newProcess` by
+reflection because the API made it private in version 13.
 
 ---
 
@@ -298,6 +425,13 @@ your voice hits, since logcat names the match.
 | [`ChatScreen.kt`](app/src/main/java/com/vamshi/aiassistant/ChatScreen.kt) | Chat UI — streams commentary and the final answer separately |
 | [`ChatApi.kt`](app/src/main/java/com/vamshi/aiassistant/ChatApi.kt) | Chat SSE and audio-transcription client |
 | [`DeviceClockToolExecutor.kt`](app/src/main/java/com/vamshi/aiassistant/DeviceClockToolExecutor.kt) | Runs client-side clock tools via `AlarmClock` intents |
+| [`DeviceSettingsToolExecutor.kt`](app/src/main/java/com/vamshi/aiassistant/DeviceSettingsToolExecutor.kt) | Runs the phone-settings tools (status, toggles, brightness, Wi-Fi switching) |
+| [`DeviceTools.kt`](app/src/main/java/com/vamshi/aiassistant/DeviceTools.kt) | Routes a backend tool request to the clock or settings executor |
+| [`MoreScreen.kt`](app/src/main/java/com/vamshi/aiassistant/MoreScreen.kt) | The **More** page: connectivity section plus the brightness slider |
+| [`ConnectivityToggles.kt`](app/src/main/java/com/vamshi/aiassistant/ConnectivityToggles.kt) | Wi-Fi, mobile data, Bluetooth and airplane mode switches |
+| [`ShizukuRadios.kt`](app/src/main/java/com/vamshi/aiassistant/ShizukuRadios.kt) | Runs shell commands through Shizuku (radio toggles, command output) |
+| [`WifiNetworks.kt`](app/src/main/java/com/vamshi/aiassistant/WifiNetworks.kt) / [`WifiNetworksSection.kt`](app/src/main/java/com/vamshi/aiassistant/WifiNetworksSection.kt) | Scans networks and switches to saved ones; the list UI |
+| [`WifiSwitchMain.kt`](app/src/main/java/com/vamshi/aiassistant/WifiSwitchMain.kt) | Shell-user helper (run via `app_process`) that joins a saved network by id |
 | [`backend/src/tool-registry.ts`](backend/src/tool-registry.ts) | Shared tool definitions and the tool sets exposed to chat and live agents |
 | [`assist/`](app/src/main/java/com/vamshi/aiassistant/assist/) | `VoiceInteractionService` trio that makes the app the default assistant |
 | [`overlay/AssistantTrigger.kt`](app/src/main/java/com/vamshi/aiassistant/overlay/AssistantTrigger.kt) | Single entry point; routes on lock state |
@@ -363,6 +497,12 @@ modes:
   notification claiming to listen.
 - **Loud playback** hurts detection — there is no acoustic echo cancellation on
   this path. Consider ducking media on detect.
+- **Shizuku does not survive a reboot.** Wi-Fi, mobile data and airplane mode
+  control stops until Shizuku is started again (see
+  [Phone controls and Shizuku](#phone-controls-and-shizuku)). Some ROMs, such as
+  Realme's ColorOS, also need *Disable permission monitoring* turned on.
+- **Bluetooth toggling is limited to Android 11 and older**, and Wi-Fi
+  switching only works for networks already saved on the phone.
 - **Power-button mapping is OEM-controlled.** Being the default assistant is
   what Pixel/AOSP maps to long-press; some skinned ROMs hardwire it to their own
   assistant with no override.

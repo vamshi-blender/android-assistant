@@ -70,8 +70,8 @@ The overlay's Live button starts a fresh conversational `gpt-live-1` session.
 session ID and SDP answer. It uses the same `APP_API_KEY` authentication and
 requires an `OPENAI_API_KEY` with GPT-Live access. This route runs locally and
 on Vercel; microphone and speaker audio travel directly between Android and
-OpenAI over WebRTC after setup. Delegated backend work provides web search and
-the supported Android Clock actions.
+OpenAI over WebRTC after setup. Delegated backend work provides web search, the
+supported Android Clock actions, and the [phone-settings tools](#phone-settings-tools).
 
 The app displays both speakers' live captions, supports microphone mute, and
 ends the session when you tap end or dismiss the overlay. Each Live call has
@@ -89,7 +89,8 @@ Tool schemas and agent-specific availability are centralized in
 `src/tool-registry.ts`. Chat and live voice both see one
 `manage_device_clock` tool containing the supported Clock actions. Live voice
 additionally receives `get_device_time` and `end_session`; those tools are not
-exposed to text chat.
+exposed to text chat. The phone-settings tools described
+[below](#phone-settings-tools) are available to every agent.
 
 Clock tools pause using Agents SDK `interruptions` and serialized `RunState`.
 The SSE response ends with `client.tools.requested` (call IDs, actions, arguments,
@@ -113,8 +114,66 @@ timeout reports `unknown`, never success. Only explicit `show_alarms` and
 `show_timers` requests use ordinary activity launches (success means the page
 launch was accepted). No fallback silently executes an unconfirmed change.
 
+### Phone-settings tools
+
+Three more device tools use the same pause/resume flow as the Clock tool. They
+are offered to every agent (OpenAI and Groq chat, OpenAI and Groq live voice):
+
+| Tool | Arguments | Effect |
+| --- | --- | --- |
+| `get_device_status` | `includeWifiNetworks?` | Wi-Fi (and connected network), mobile data, Bluetooth, airplane mode, brightness; optionally the Wi-Fi networks in range |
+| `set_device_setting` | `setting` (`wifi`, `mobile_data`, `bluetooth`, `airplane_mode`, `brightness`), `enabled?`, `level?` | Sets one setting to an explicit state; `level` is 0-100 for brightness |
+| `switch_wifi_network` | `ssid` | Switches to a saved network that is in range |
+
+Unlike `manage_device_clock`, they are sent to the phone under their own names
+(see `toDeviceRequest` in `src/tool-registry.ts`). Android runs them in
+`DeviceSettingsToolExecutor`. Turning off the connection the conversation is
+using (Wi-Fi with no mobile data, mobile data while on cellular, or turning on
+airplane mode) is applied about three seconds after the result is returned, and
+the result says so. Wi-Fi, mobile data and airplane mode need Shizuku running
+and approved for the app; without it the tools return `requires_user_action`.
+Setup steps are in the root README's
+[Phone controls and Shizuku](../README.md#phone-controls-and-shizuku) section.
+
+Behavior the prompts and tool descriptions rely on:
+
+- `set_device_setting` always takes an explicit target (`enabled: true|false`,
+  or `level` for brightness), never a toggle, and normally reports success only
+  after reading the state back. A request that was sent but has not taken effect
+  returns `unknown`, which the model must not retry automatically. The
+  connection-cutting changes above are the exception: they are scheduled, so the
+  result says they are not verified yet.
+- Brightness needs the "Modify system settings" permission and turns
+  auto-brightness off. Bluetooth is only switchable on Android 11 and older.
+- `switch_wifi_network` only joins saved networks that are in range; an unsaved
+  one returns `requires_user_action` because it needs a password.
+- Tool results are capped at 2000 characters by the `toolResults` validation in
+  `http.ts` and `live-delegate.ts`, so `get_device_status` drops the weakest
+  Wi-Fi networks to fit.
+- The tools are device-executed, so they use `needsApproval: true` purely as the
+  pause mechanism (it is not a user confirmation prompt). Their schemas set
+  `additionalProperties: true` because the Agents SDK's non-strict tool type
+  requires it.
+
+**Groq schema rule.** Groq rejects a function sent with `strict: true` and an
+empty `required` list (`400 ... 'required' present but 'properties' is
+missing`), which made every Groq Live delegation fail while `end_session` was
+defined that way. The Groq-only `end_session` tool in `src/tool-registry.ts` is
+therefore non-strict, and a test fails if a Groq tool is strict with an empty
+`required` list. The OpenAI Live definition of `end_session` and
+`get_device_time` stays strict.
+
+Deploy the backend and the app together: a backend that offers these tools needs
+an app that can run them, and an older backend does not offer them at all.
+
 Validation: `npm test` exercises SDK pause/serialize/resume with each device
-outcome, mismatched call IDs, token tampering and expiration. `npm run typecheck`
-checks the backend. Device acceptance checks: set an alarm and timer, dismiss
-and snooze an alarm, ambiguous label, unsupported Clock app, and no callback;
-verify both chat and overlay, with the app selected and deselected as assistant.
+outcome (including each phone-settings tool), mismatched call IDs, token
+tampering and expiration, that every agent tool list exposes the phone-settings
+tools, and the Groq schema rule. `npm run typecheck` checks the backend. Device
+acceptance checks: set an alarm and timer, dismiss and snooze an alarm,
+ambiguous label, unsupported Clock app, and no callback; verify both chat and
+overlay, with the app selected and deselected as assistant. For the
+phone-settings tools, with Shizuku running: read the status, toggle each radio
+off and on, set brightness, and switch between two saved Wi-Fi networks, in
+chat, overlay and Live voice with both OpenAI and Groq. Then stop Shizuku and
+confirm the radio and Wi-Fi tools report `requires_user_action`.
